@@ -6,9 +6,12 @@
 		"compile": "hardhat compile",
 		"test": "REPORT_GAS=true hardhat test",
 		"clean": "rimraf ./artifacts ./cache ./coverage ./types ./deployments/localcofhe",
-		"deploy": "hardhat deploy-checkout --network eth-sepolia",
-		"observer": "hardhat run scripts/observer.ts --network eth-sepolia",
-		"demo": "hardhat run scripts/demo.ts --network eth-sepolia"
+		"deploy": "hardhat deploy-checkout --network base-sepolia",
+		"register": "hardhat register-observer --network base-sepolia",
+		"observer": "hardhat run scripts/observer.ts --network base-sepolia",
+		"demo": "hardhat run scripts/demo.ts --network base-sepolia",
+		"e2e": "hardhat run scripts/e2e.ts --network base-sepolia",
+		"e2e:local": "hardhat run scripts/e2e.ts"
 	},
 	"license": "MIT",
 	"devDependencies": {

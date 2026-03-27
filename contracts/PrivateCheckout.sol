@@ -63,17 +63,13 @@ contract PrivateCheckout {
         uint256 orderId = nextOrderId++;
         uint256 deadline = block.timestamp + ORDER_TIMEOUT;
 
-        orders[orderId] = Order({
-            buyer: msg.sender,
-            observer: observerAddress,
-            encProductId: productId,
-            encAmount: amount,
-            encCode: FHE.asEuint256(0),
-            lockedEth: msg.value,
-            deadline: deadline,
-            fulfilled: false,
-            refunded: false
-        });
+        Order storage order = orders[orderId];
+        order.buyer = msg.sender;
+        order.observer = observerAddress;
+        order.encProductId = productId;
+        order.encAmount = amount;
+        order.lockedEth = msg.value;
+        order.deadline = deadline;
 
         emit OrderPlaced(
             orderId,
