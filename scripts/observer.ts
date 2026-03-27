@@ -3,12 +3,18 @@ import { cofhejs, Encryptable, FheTypes } from 'cofhejs/node'
 import { cofhejs_initializeWithHardhatSigner } from 'cofhe-hardhat-plugin'
 import { getDeployment } from '../tasks/utils'
 
+const BITREFILL_BASE = 'https://api.bitrefill.com/v2'
+
 // Product ID → Bitrefill mapping
-// In Wave 1, productId encodes both brand and denomination
+// Wave 1 uses free test products — swap slugs for real ones in Wave 2
 const PRODUCT_MAP: Record<number, { slug: string; label: string; cents: number }> = {
-	1: { slug: 'amazon-us', label: 'Amazon US $10', cents: 1000 },
-	2: { slug: 'amazon-us', label: 'Amazon US $25', cents: 2500 },
-	3: { slug: 'google-play-us', label: 'Google Play US $10', cents: 1000 },
+	1: { slug: 'test-gift-card-code', label: 'Test Gift Card (code)', cents: 1000 },
+	2: { slug: 'test-gift-card-link', label: 'Test Gift Card (link)', cents: 2500 },
+	3: { slug: 'test-gift-card-code-fail', label: 'Test Gift Card (fail)', cents: 1000 },
+	// Wave 2 real products:
+	// 1: { slug: 'amazon-us', label: 'Amazon US $10', cents: 1000 },
+	// 2: { slug: 'amazon-us', label: 'Amazon US $25', cents: 2500 },
+	// 3: { slug: 'google-play-us', label: 'Google Play US $10', cents: 1000 },
 }
 
 // Encode a gift card code string into a BigInt (ASCII bytes packed into uint128)
@@ -25,23 +31,21 @@ function encodeGiftCardCode(code: string): bigint {
 
 async function callBitrefill(slug: string, cents: number): Promise<string> {
 	const apiKey = process.env.BITREFILL_API_KEY
-	const apiSecret = process.env.BITREFILL_API_SECRET
 
-	if (!apiKey || !apiSecret) {
-		// Demo mode: return a fake code
-		console.log('  [DEMO MODE] No Bitrefill API keys — returning mock gift card code')
+	if (!apiKey) {
+		console.log('  [DEMO MODE] No BITREFILL_API_KEY — returning mock gift card code')
 		return 'DEMO-XXXX-1234'
 	}
 
-	const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64')
+	const headers = {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${apiKey}`,
+	}
 
 	// Create order
-	const createRes = await fetch('https://api.bitrefill.com/v1/order', {
+	const createRes = await fetch(`${BITREFILL_BASE}/order`, {
 		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Basic ${auth}`,
-		},
+		headers,
 		body: JSON.stringify({
 			operatorSlug: slug,
 			valuePackage: cents,
@@ -61,9 +65,7 @@ async function callBitrefill(slug: string, cents: number): Promise<string> {
 	for (let i = 0; i < 30; i++) {
 		await new Promise((r) => setTimeout(r, 2000))
 
-		const pollRes = await fetch(`https://api.bitrefill.com/v1/order/${orderData.id}`, {
-			headers: { Authorization: `Basic ${auth}` },
-		})
+		const pollRes = await fetch(`${BITREFILL_BASE}/order/${orderData.id}`, { headers })
 
 		const pollData = (await pollRes.json()) as {
 			delivered: boolean
