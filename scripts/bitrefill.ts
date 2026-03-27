@@ -11,8 +11,7 @@ export const PRODUCT_MAP: Record<number, { slug: string; label: string; value: n
 function getAuthHeader(): string {
 	const apiKey = process.env.BITREFILL_API_KEY
 	if (!apiKey) throw new Error('BITREFILL_API_KEY not set in .env')
-	// Personal API uses the key as both ID and secret for Basic auth
-	return `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`
+	return `Bearer ${apiKey}`
 }
 
 export async function callBitrefill(slug: string, value: number): Promise<string> {
