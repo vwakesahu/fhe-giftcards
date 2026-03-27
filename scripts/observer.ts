@@ -6,7 +6,7 @@ import { callBitrefill, PRODUCT_MAP } from './bitrefill'
 
 function encodeGiftCardCode(code: string): bigint {
 	const bytes = Buffer.from(code, 'ascii')
-	if (bytes.length > 16) throw new Error('Code too long for euint128 (max 16 chars)')
+	if (bytes.length > 32) throw new Error('Code too long for euint256 (max 32 chars)')
 	let result = 0n
 	for (let i = 0; i < bytes.length; i++) {
 		result = (result << 8n) | BigInt(bytes[i])
@@ -89,13 +89,13 @@ async function main() {
 				const giftCardCode = await callBitrefill(product.slug, product.value)
 				console.log(`  Gift card code obtained: ${giftCardCode.substring(0, 4)}****`)
 
-				// Step 4: Encode the code as uint128
+				// Step 4: Encode the code as uint256
 				const encodedCode = encodeGiftCardCode(giftCardCode)
-				console.log(`  Encoded as uint128: ${encodedCode}`)
+				console.log(`  Encoded as uint256: ${encodedCode}`)
 
 				// Step 5: Encrypt for the contract
 				console.log('  Encrypting code for buyer...')
-				const encryptResult = await cofhejs.encrypt([Encryptable.uint128(encodedCode)] as const)
+				const encryptResult = await cofhejs.encrypt([Encryptable.uint256(encodedCode)] as const)
 				if (!encryptResult.data) {
 					throw new Error(`Encryption failed: ${encryptResult.error}`)
 				}

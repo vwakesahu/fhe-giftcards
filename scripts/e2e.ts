@@ -59,7 +59,7 @@ async function initCofhe(signer: HardhatEthersSigner) {
 
 function encodeGiftCardCode(code: string): bigint {
 	const bytes = Buffer.from(code, 'ascii')
-	if (bytes.length > 16) throw new Error('Code too long for euint128 (max 16 chars)')
+	if (bytes.length > 32) throw new Error('Code too long for euint256 (max 32 chars)')
 	let result = 0n
 	for (let i = 0; i < bytes.length; i++) {
 		result = (result << 8n) | BigInt(bytes[i])
@@ -181,7 +181,7 @@ async function main() {
 	console.log(`  Encoded as uint128: ${encodedCode}`)
 
 	console.log('  Encrypting code for buyer only...')
-	const codeEncResult = await cofhejs.encrypt([Encryptable.uint128(encodedCode)] as const)
+	const codeEncResult = await cofhejs.encrypt([Encryptable.uint256(encodedCode)] as const)
 	if (!codeEncResult.data) throw new Error(`Encrypt code failed: ${codeEncResult.error}`)
 	const [encCode] = codeEncResult.data
 
@@ -197,7 +197,7 @@ async function main() {
 	const finalOrder = await checkout.getOrder(orderId)
 	console.log(`  encCode handle: ${finalOrder.encCode} (opaque — useless to anyone else)`)
 
-	const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint128)
+	const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint256)
 	const decoded = decodeGiftCardCode(unsealedCode.data as bigint)
 
 	console.log('\n╔══════════════════════════════════════════╗')

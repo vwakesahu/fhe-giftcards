@@ -9,7 +9,7 @@ contract PrivateCheckout {
         address observer;
         euint64 encProductId;
         euint64 encAmount;
-        euint128 encCode;
+        euint256 encCode;
         uint256 lockedEth;
         uint256 deadline;
         bool fulfilled;
@@ -68,7 +68,7 @@ contract PrivateCheckout {
             observer: observerAddress,
             encProductId: productId,
             encAmount: amount,
-            encCode: FHE.asEuint128(0),
+            encCode: FHE.asEuint256(0),
             lockedEth: msg.value,
             deadline: deadline,
             fulfilled: false,
@@ -85,13 +85,13 @@ contract PrivateCheckout {
         );
     }
 
-    function fulfillOrder(uint256 orderId, InEuint128 memory encCode) external {
+    function fulfillOrder(uint256 orderId, InEuint256 memory encCode) external {
         Order storage order = orders[orderId];
         require(msg.sender == order.observer, "Not observer");
         require(!order.fulfilled, "Already fulfilled");
         require(block.timestamp <= order.deadline, "Deadline passed");
 
-        euint128 code = FHE.asEuint128(encCode);
+        euint256 code = FHE.asEuint256(encCode);
 
         // Contract stores the code handle
         FHE.allowThis(code);
@@ -134,7 +134,7 @@ contract PrivateCheckout {
         address observer,
         euint64 encProductId,
         euint64 encAmount,
-        euint128 encCode,
+        euint256 encCode,
         uint256 lockedEth,
         uint256 deadline,
         bool fulfilled,
