@@ -94,9 +94,9 @@ async function main() {
 	console.log(`Observer starting on ${network.name}`)
 	console.log(`Contract: ${contractAddress}`)
 
-	// Use OBSERVER_PRIVATE_KEY if available, otherwise first signer
+	// signers[0] = buyer (PRIVATE_KEY), signers[1] = observer (OBSERVER_PRIVATE_KEY)
 	const signers = await ethers.getSigners()
-	const observer = signers[0]
+	const observer = signers.length > 1 ? signers[1] : signers[0]
 	console.log(`Observer address: ${observer.address}`)
 
 	await cofhejs_initializeWithHardhatSigner(hre, observer)
