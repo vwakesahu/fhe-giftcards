@@ -8,6 +8,7 @@ import hre from 'hardhat'
 import { cofhejs, Encryptable, FheTypes, type AbstractProvider, type AbstractSigner } from 'cofhejs/node'
 import type { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers'
 import { TypedDataField } from 'ethers'
+import { callBitrefill, PRODUCT_MAP } from './bitrefill'
 
 // --- helpers ---
 
@@ -108,7 +109,7 @@ async function main() {
 
 	// ── 2. Register observer ───────────────────────────────
 	console.log('② Registering observer (0.01 ETH bond)...')
-	const regTx = await checkout.connect(observer).registerObserver({
+	const regTx = await (checkout.connect(observer) as any).registerObserver({
 		value: ethers.parseEther('0.01'),
 	})
 	await regTx.wait()
@@ -126,7 +127,7 @@ async function main() {
 	if (!encResult.data) throw new Error(`Encrypt failed: ${encResult.error}`)
 	const [encProductId, encAmount] = encResult.data
 
-	const placeTx = await checkout.connect(buyer).placeOrder(
+	const placeTx = await (checkout.connect(buyer) as any).placeOrder(
 		encProductId,
 		encAmount,
 		observer.address,
@@ -166,11 +167,17 @@ async function main() {
 	console.log(`  Decrypted productId: ${unsealedPid.data}`)
 	console.log(`  Decrypted amount   : ${unsealedAmt.data} cents`)
 
-	// Simulate Bitrefill purchase (or real API call if key is set)
-	const mockCode = 'ABCD-EFGH-1234'
-	console.log(`  Gift card code obtained: ${mockCode}`)
+	// Look up product and call Bitrefill API
+	const productId = Number(unsealedPid.data)
+	const product = PRODUCT_MAP[productId]
+	if (!product) throw new Error(`Unknown product ID: ${productId}`)
+	console.log(`  Product: ${product.label} (${product.slug})`)
 
-	const encodedCode = encodeGiftCardCode(mockCode)
+	console.log('  Purchasing from Bitrefill...')
+	const giftCardCode = await callBitrefill(product.slug, product.cents)
+	console.log(`  Gift card code obtained: ${giftCardCode}`)
+
+	const encodedCode = encodeGiftCardCode(giftCardCode)
 	console.log(`  Encoded as uint128: ${encodedCode}`)
 
 	console.log('  Encrypting code for buyer only...')
@@ -179,7 +186,7 @@ async function main() {
 	const [encCode] = codeEncResult.data
 
 	console.log('  Calling fulfillOrder...')
-	const fulfillTx = await checkout.connect(observer).fulfillOrder(orderId, encCode)
+	const fulfillTx = await (checkout.connect(observer) as any).fulfillOrder(orderId, encCode)
 	await fulfillTx.wait()
 	console.log(`  Fulfilled! Tx: ${fulfillTx.hash}\n`)
 
