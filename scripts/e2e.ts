@@ -8,7 +8,7 @@ import hre from 'hardhat'
 import { cofhejs, Encryptable, FheTypes, type AbstractProvider, type AbstractSigner } from 'cofhejs/node'
 import type { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers'
 import { TypedDataField } from 'ethers'
-import { callBitrefill, PRODUCT_MAP } from './bitrefill'
+import { purchaseGiftCard, PRODUCT_MAP } from './giftcard'
 
 // --- helpers ---
 
@@ -167,14 +167,14 @@ async function main() {
 	console.log(`  Decrypted productId: ${unsealedPid.data}`)
 	console.log(`  Decrypted amount   : ${unsealedAmt.data} cents`)
 
-	// Look up product and call Bitrefill API
+	// Look up product and call Reloadly API
 	const productId = Number(unsealedPid.data)
 	const product = PRODUCT_MAP[productId]
 	if (!product) throw new Error(`Unknown product ID: ${productId}`)
-	console.log(`  Product: ${product.label} (${product.slug})`)
+	console.log(`  Product: ${product.label}`)
 
-	console.log('  Purchasing from Bitrefill...')
-	const giftCardCode = await callBitrefill(product.slug, product.value)
+	console.log('  Purchasing from Reloadly (sandbox)...')
+	const giftCardCode = await purchaseGiftCard(product.productId, product.unitPrice)
 	console.log(`  Gift card code obtained: ${giftCardCode}`)
 
 	const encodedCode = encodeGiftCardCode(giftCardCode)
