@@ -174,7 +174,7 @@ async function main() {
 	console.log(`  Product: ${product.label} (${product.slug})`)
 
 	console.log('  Purchasing from Bitrefill...')
-	const giftCardCode = await callBitrefill(product.slug, product.cents)
+	const giftCardCode = await callBitrefill(product.slug, product.value)
 	console.log(`  Gift card code obtained: ${giftCardCode}`)
 
 	const encodedCode = encodeGiftCardCode(giftCardCode)
