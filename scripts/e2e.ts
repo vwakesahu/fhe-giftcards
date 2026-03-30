@@ -1,14 +1,16 @@
 /**
  * End-to-end test of the full private checkout flow in a single script.
  *
- * Runs on whatever --network you pass (use base-sepolia for real testnet).
- * Does everything: deploy → register observer → place order → fulfill → decrypt.
+ * Hybrid encryption: AES encrypts the gift card code, IPFS stores the ciphertext,
+ * FHE encrypts the AES key on-chain so only the buyer can decrypt it.
  */
 import hre from 'hardhat'
 import { cofhejs, Encryptable, FheTypes, type AbstractProvider, type AbstractSigner } from 'cofhejs/node'
 import type { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers'
 import { TypedDataField } from 'ethers'
 import { purchaseGiftCard, PRODUCT_MAP } from './giftcard'
+import { generateAesKey, aesKeyToBigInt, bigIntToAesKey, aesEncrypt, aesDecrypt } from './crypto'
+import { uploadToIpfs, fetchFromIpfs } from './ipfs'
 
 // --- helpers ---
 
@@ -55,26 +57,6 @@ async function initCofhe(signer: HardhatEthersSigner) {
 
 	if (result.error) throw new Error(`cofhejs init failed: ${result.error}`)
 	return result.data
-}
-
-function encodeGiftCardCode(code: string): bigint {
-	const bytes = Buffer.from(code, 'ascii')
-	if (bytes.length > 16) throw new Error('Code too long for euint128 (max 16 chars)')
-	let result = 0n
-	for (let i = 0; i < bytes.length; i++) {
-		result = (result << 8n) | BigInt(bytes[i])
-	}
-	return result
-}
-
-function decodeGiftCardCode(encoded: bigint): string {
-	const bytes: number[] = []
-	let val = encoded
-	while (val > 0n) {
-		bytes.unshift(Number(val & 0xffn))
-		val >>= 8n
-	}
-	return Buffer.from(bytes).toString('ascii')
 }
 
 // --- main ---
@@ -190,16 +172,26 @@ async function main() {
 	const giftCardCode = await purchaseGiftCard(product.productId, product.unitPrice)
 	console.log(`  Gift card code obtained: ${giftCardCode}`)
 
-	const encodedCode = encodeGiftCardCode(giftCardCode)
-	console.log(`  Encoded as uint128: ${encodedCode}`)
+	// Hybrid encryption: AES encrypt the code, upload to IPFS, FHE encrypt the AES key
+	console.log('\n  Hybrid encryption:')
+	const aesKey = generateAesKey()
+	console.log(`  1. Generated AES-128 key: ${aesKey.toString('hex')}`)
 
-	console.log('  Encrypting code for buyer only...')
-	const codeEncResult = await cofhejs.encrypt([Encryptable.uint128(encodedCode)] as const)
-	if (!codeEncResult.data) throw new Error(`Encrypt code failed: ${codeEncResult.error}`)
-	const [encCode] = codeEncResult.data
+	const encryptedPayload = aesEncrypt(giftCardCode, aesKey)
+	console.log(`  2. AES-encrypted gift card code (${encryptedPayload.ciphertext.length / 2} bytes)`)
 
-	console.log('  Calling fulfillOrder...')
-	const fulfillTx = await (checkout.connect(observer) as any).fulfillOrder(orderId, encCode)
+	console.log('  3. Uploading encrypted payload to IPFS...')
+	const ipfsCid = await uploadToIpfs(encryptedPayload)
+	console.log(`     IPFS CID: ${ipfsCid}`)
+
+	const aesKeyBigInt = aesKeyToBigInt(aesKey)
+	console.log(`  4. FHE-encrypting AES key for buyer only...`)
+	const keyEncResult = await cofhejs.encrypt([Encryptable.uint128(aesKeyBigInt)] as const)
+	if (!keyEncResult.data) throw new Error(`Encrypt AES key failed: ${keyEncResult.error}`)
+	const [encAesKey] = keyEncResult.data
+
+	console.log('  5. Calling fulfillOrder(encAesKey, ipfsCid)...')
+	const fulfillTx = await (checkout.connect(observer) as any).fulfillOrder(orderId, encAesKey, ipfsCid)
 	await fulfillTx.wait()
 	console.log(`  Fulfilled! Tx: ${fulfillTx.hash}`)
 	if (explorer) console.log(txLink(fulfillTx.hash))
@@ -210,61 +202,51 @@ async function main() {
 	await initCofhe(buyer)
 
 	const finalOrder = await checkout.getOrder(orderId)
-	console.log(`  encCode handle: ${finalOrder.encCode} (opaque — useless to anyone else)`)
+	console.log(`  encAesKey handle: ${finalOrder.encAesKey} (opaque — useless without FHE permit)`)
+	console.log(`  ipfsCid on-chain: ${finalOrder.ipfsCid} (public, but data is AES-encrypted)`)
 
-	// Debug: manually call threshold network to see raw response
-	const handle = finalOrder.encCode
-	const permission = cofhejs.getPermission()
-	if (permission.data) {
-		const debugBody = {
-			ct_tempkey: BigInt(handle).toString(16).padStart(64, '0'),
-			host_chain_id: 84532,
-			permit: permission.data,
-		}
-		console.log('  [DEBUG] Calling threshold network sealoutput...')
-		try {
-			const debugRes = await fetch('https://testnet-cofhe-tn.fhenix.zone/sealoutput', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(debugBody),
-			})
-			const debugData = await debugRes.text()
-			console.log(`  [DEBUG] Response: ${debugData.substring(0, 500)}`)
-		} catch (e) {
-			console.log(`  [DEBUG] Error: ${e}`)
-		}
-	}
-
-	let codeValue: bigint | null = null
+	// Step A: FHE-unseal the AES key
+	console.log('\n  Decryption steps:')
+	let aesKeyValue: bigint | null = null
 	for (let attempt = 1; attempt <= 10; attempt++) {
-		const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint128)
-		if (unsealedCode.data && unsealedCode.data !== 0n) {
-			codeValue = unsealedCode.data as bigint
+		const unsealedKey = await cofhejs.unseal(finalOrder.encAesKey, FheTypes.Uint128)
+		if (unsealedKey.data && unsealedKey.data !== 0n) {
+			aesKeyValue = unsealedKey.data as bigint
 			break
 		}
 		console.log(`  Waiting for FHE network to process decryption... (${attempt}/10)`)
 		await new Promise((r) => setTimeout(r, 5000))
 	}
 
-	if (codeValue) {
-		const decoded = decodeGiftCardCode(codeValue)
+	if (aesKeyValue) {
+		console.log(`  1. FHE-unsealed AES key: ${aesKeyValue.toString(16)}`)
+
+		// Step B: Fetch encrypted payload from IPFS
+		console.log(`  2. Fetching AES ciphertext from IPFS: ${finalOrder.ipfsCid}`)
+		const fetchedPayload = await fetchFromIpfs(finalOrder.ipfsCid)
+
+		// Step C: AES-decrypt the gift card code
+		const recoveredKey = bigIntToAesKey(aesKeyValue)
+		const decryptedCode = aesDecrypt(fetchedPayload, recoveredKey)
+		console.log('  3. AES-decrypted gift card code')
+
 		console.log('\n╔══════════════════════════════════════════╗')
-		console.log(`║  Gift card code: ${decoded.padEnd(23)}║`)
+		console.log(`║  Gift card code: ${decryptedCode.padEnd(23)}║`)
 		console.log('╚══════════════════════════════════════════╝')
 	} else {
-		// Fallback: decode from the local value the observer had
-		const fallbackDecoded = decodeGiftCardCode(encodedCode)
-		console.log('\n  FHE network still processing — showing code from observer memory:')
-		console.log('\n╔══════════════════════════════════════════╗')
-		console.log(`║  Gift card code: ${fallbackDecoded.padEnd(23)}║`)
-		console.log('╚══════════════════════════════════════════╝')
+		console.log('\n  FHE network still processing AES key decryption.')
+		console.log('  The encrypted code is safely stored on IPFS — retry later.')
+		console.log(`  IPFS CID: ${finalOrder.ipfsCid}`)
+		console.log(`  (For demo: original code was "${giftCardCode}")`)
 	}
 
 	// ── Summary ────────────────────────────────────────────
 	console.log('\n── Privacy summary ──')
-	console.log('✓ Product ID    — encrypted on-chain, only observer could decrypt')
-	console.log('✓ Amount        — encrypted on-chain, only observer could decrypt')
-	console.log('✓ Gift card code — encrypted on-chain, only buyer can decrypt')
+	console.log('✓ Product ID    — FHE-encrypted on-chain, only observer could decrypt')
+	console.log('✓ Amount        — FHE-encrypted on-chain, only observer could decrypt')
+	console.log('✓ AES key       — FHE-encrypted on-chain, only buyer can decrypt')
+	console.log('✓ Gift card code — AES-encrypted on IPFS, needs key from FHE to read')
+	console.log('✓ IPFS CID      — public, but ciphertext is useless without the AES key')
 	console.log('✓ ETH payment   — visible (0.001 ETH), but what was bought is hidden')
 	console.log('✓ Block explorer shows opaque handles, not actual values')
 }

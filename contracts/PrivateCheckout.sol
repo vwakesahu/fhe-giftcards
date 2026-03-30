@@ -9,7 +9,8 @@ contract PrivateCheckout {
         address observer;
         euint64 encProductId;
         euint64 encAmount;
-        euint128 encCode;
+        euint128 encAesKey;       // AES-128 key, FHE-encrypted — only buyer can decrypt
+        string ipfsCid;           // IPFS CID of AES-encrypted gift card code
         uint256 lockedEth;
         uint256 deadline;
         bool fulfilled;
@@ -32,7 +33,7 @@ contract PrivateCheckout {
         address observer,
         uint256 deadline
     );
-    event OrderFulfilled(uint256 indexed orderId);
+    event OrderFulfilled(uint256 indexed orderId, string ipfsCid);
     event OrderRefunded(uint256 indexed orderId);
 
     function registerObserver() external payable {
@@ -81,28 +82,29 @@ contract PrivateCheckout {
         );
     }
 
-    function fulfillOrder(uint256 orderId, InEuint128 memory encCode) external {
+    function fulfillOrder(uint256 orderId, InEuint128 memory encAesKey, string calldata ipfsCid) external {
         Order storage order = orders[orderId];
         require(msg.sender == order.observer, "Not observer");
         require(!order.fulfilled, "Already fulfilled");
         require(block.timestamp <= order.deadline, "Deadline passed");
 
-        euint128 code = FHE.asEuint128(encCode);
+        euint128 aesKey = FHE.asEuint128(encAesKey);
 
-        // Contract stores the code handle
-        FHE.allowThis(code);
+        // Contract stores the key handle
+        FHE.allowThis(aesKey);
 
-        // ONLY the buyer can decrypt the gift card code
-        FHE.allow(code, order.buyer);
+        // ONLY the buyer can decrypt the AES key
+        FHE.allow(aesKey, order.buyer);
 
-        order.encCode = code;
+        order.encAesKey = aesKey;
+        order.ipfsCid = ipfsCid;
         order.fulfilled = true;
 
         // Pay the observer
         (bool sent, ) = payable(order.observer).call{value: order.lockedEth}("");
         require(sent, "ETH transfer failed");
 
-        emit OrderFulfilled(orderId);
+        emit OrderFulfilled(orderId, ipfsCid);
     }
 
     function refund(uint256 orderId) external {
@@ -130,7 +132,8 @@ contract PrivateCheckout {
         address observer,
         euint64 encProductId,
         euint64 encAmount,
-        euint128 encCode,
+        euint128 encAesKey,
+        string memory ipfsCid,
         uint256 lockedEth,
         uint256 deadline,
         bool fulfilled,
@@ -142,7 +145,8 @@ contract PrivateCheckout {
             o.observer,
             o.encProductId,
             o.encAmount,
-            o.encCode,
+            o.encAesKey,
+            o.ipfsCid,
             o.lockedEth,
             o.deadline,
             o.fulfilled,

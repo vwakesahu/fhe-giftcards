@@ -161,7 +161,7 @@ describe('PrivateCheckout', function () {
 
 			const observerBalBefore = await hre.ethers.provider.getBalance(observer.address)
 
-			const tx = await checkout.connect(observer).fulfillOrder(0, encCode)
+			const tx = await checkout.connect(observer).fulfillOrder(0, encCode, 'QmTestCid123')
 			await expect(tx).to.emit(checkout, 'OrderFulfilled')
 
 			const receipt = await tx.wait()
@@ -195,12 +195,12 @@ describe('PrivateCheckout', function () {
 			const [encCode] = await hre.cofhe.expectResultSuccess(
 				cofhejs.encrypt([Encryptable.uint128(123456789n)] as const)
 			)
-			await checkout.connect(observer).fulfillOrder(0, encCode)
+			await checkout.connect(observer).fulfillOrder(0, encCode, 'QmTestCid123')
 
 			// Buyer unseals the code
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(buyer))
 			const order = await checkout.getOrder(0)
-			const unsealedCode = await cofhejs.unseal(order.encCode, FheTypes.Uint128)
+			const unsealedCode = await cofhejs.unseal(order.encAesKey, FheTypes.Uint128)
 			await hre.cofhe.expectResultValue(unsealedCode, 123456789n)
 		})
 
@@ -224,7 +224,7 @@ describe('PrivateCheckout', function () {
 			)
 
 			await expect(
-				checkout.connect(stranger).fulfillOrder(0, encCode)
+				checkout.connect(stranger).fulfillOrder(0, encCode, 'QmTestCid123')
 			).to.be.revertedWith('Not observer')
 		})
 
@@ -246,13 +246,13 @@ describe('PrivateCheckout', function () {
 			const [encCode] = await hre.cofhe.expectResultSuccess(
 				cofhejs.encrypt([Encryptable.uint128(123n)] as const)
 			)
-			await checkout.connect(observer).fulfillOrder(0, encCode)
+			await checkout.connect(observer).fulfillOrder(0, encCode, 'QmTestCid123')
 
 			const [encCode2] = await hre.cofhe.expectResultSuccess(
 				cofhejs.encrypt([Encryptable.uint128(456n)] as const)
 			)
 			await expect(
-				checkout.connect(observer).fulfillOrder(0, encCode2)
+				checkout.connect(observer).fulfillOrder(0, encCode2, 'QmTestCid456')
 			).to.be.revertedWith('Already fulfilled')
 		})
 
@@ -279,7 +279,7 @@ describe('PrivateCheckout', function () {
 			)
 
 			await expect(
-				checkout.connect(observer).fulfillOrder(0, encCode)
+				checkout.connect(observer).fulfillOrder(0, encCode, 'QmTestCid123')
 			).to.be.revertedWith('Deadline passed')
 		})
 	})
@@ -358,7 +358,7 @@ describe('PrivateCheckout', function () {
 			const [encCode] = await hre.cofhe.expectResultSuccess(
 				cofhejs.encrypt([Encryptable.uint128(123n)] as const)
 			)
-			await checkout.connect(observer).fulfillOrder(0, encCode)
+			await checkout.connect(observer).fulfillOrder(0, encCode, 'QmTestCid123')
 
 			await time.increase(11 * 60)
 
