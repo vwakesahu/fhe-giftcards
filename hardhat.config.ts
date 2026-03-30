@@ -33,6 +33,9 @@ const config: HardhatUserConfig = {
 			timeout: 60000,
 		},
 	},
+	etherscan: {
+		apiKey: process.env.BASESCAN_API_KEY || '',
+	},
 }
 
 export default config
