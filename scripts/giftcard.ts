@@ -81,7 +81,8 @@ export async function purchaseGiftCard(productId: number, unitPrice: number): Pr
 				const code = cards[0].pinCode
 					? `${cards[0].cardNumber}-${cards[0].pinCode}`
 					: cards[0].cardNumber
-				return code
+				// Truncate to 16 chars to fit euint128
+				return code.slice(0, 16)
 			}
 		}
 

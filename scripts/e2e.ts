@@ -59,7 +59,7 @@ async function initCofhe(signer: HardhatEthersSigner) {
 
 function encodeGiftCardCode(code: string): bigint {
 	const bytes = Buffer.from(code, 'ascii')
-	if (bytes.length > 32) throw new Error('Code too long for euint256 (max 32 chars)')
+	if (bytes.length > 16) throw new Error('Code too long for euint128 (max 16 chars)')
 	let result = 0n
 	for (let i = 0; i < bytes.length; i++) {
 		result = (result << 8n) | BigInt(bytes[i])
@@ -194,7 +194,7 @@ async function main() {
 	console.log(`  Encoded as uint128: ${encodedCode}`)
 
 	console.log('  Encrypting code for buyer only...')
-	const codeEncResult = await cofhejs.encrypt([Encryptable.uint256(encodedCode)] as const)
+	const codeEncResult = await cofhejs.encrypt([Encryptable.uint128(encodedCode)] as const)
 	if (!codeEncResult.data) throw new Error(`Encrypt code failed: ${codeEncResult.error}`)
 	const [encCode] = codeEncResult.data
 
@@ -212,9 +212,32 @@ async function main() {
 	const finalOrder = await checkout.getOrder(orderId)
 	console.log(`  encCode handle: ${finalOrder.encCode} (opaque — useless to anyone else)`)
 
+	// Debug: manually call threshold network to see raw response
+	const handle = finalOrder.encCode
+	const permission = cofhejs.getPermission()
+	if (permission.data) {
+		const debugBody = {
+			ct_tempkey: BigInt(handle).toString(16).padStart(64, '0'),
+			host_chain_id: 84532,
+			permit: permission.data,
+		}
+		console.log('  [DEBUG] Calling threshold network sealoutput...')
+		try {
+			const debugRes = await fetch('https://testnet-cofhe-tn.fhenix.zone/sealoutput', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(debugBody),
+			})
+			const debugData = await debugRes.text()
+			console.log(`  [DEBUG] Response: ${debugData.substring(0, 500)}`)
+		} catch (e) {
+			console.log(`  [DEBUG] Error: ${e}`)
+		}
+	}
+
 	let codeValue: bigint | null = null
 	for (let attempt = 1; attempt <= 10; attempt++) {
-		const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint256)
+		const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint128)
 		if (unsealedCode.data && unsealedCode.data !== 0n) {
 			codeValue = unsealedCode.data as bigint
 			break

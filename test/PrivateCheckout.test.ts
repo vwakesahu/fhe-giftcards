@@ -156,7 +156,7 @@ describe('PrivateCheckout', function () {
 			// Observer encrypts the gift card code
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(observer))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(123456789n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(123456789n)] as const)
 			)
 
 			const observerBalBefore = await hre.ethers.provider.getBalance(observer.address)
@@ -193,14 +193,14 @@ describe('PrivateCheckout', function () {
 			// Observer fulfills
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(observer))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(123456789n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(123456789n)] as const)
 			)
 			await checkout.connect(observer).fulfillOrder(0, encCode)
 
 			// Buyer unseals the code
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(buyer))
 			const order = await checkout.getOrder(0)
-			const unsealedCode = await cofhejs.unseal(order.encCode, FheTypes.Uint256)
+			const unsealedCode = await cofhejs.unseal(order.encCode, FheTypes.Uint128)
 			await hre.cofhe.expectResultValue(unsealedCode, 123456789n)
 		})
 
@@ -220,7 +220,7 @@ describe('PrivateCheckout', function () {
 
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(stranger))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(999n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(999n)] as const)
 			)
 
 			await expect(
@@ -244,12 +244,12 @@ describe('PrivateCheckout', function () {
 
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(observer))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(123n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(123n)] as const)
 			)
 			await checkout.connect(observer).fulfillOrder(0, encCode)
 
 			const [encCode2] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(456n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(456n)] as const)
 			)
 			await expect(
 				checkout.connect(observer).fulfillOrder(0, encCode2)
@@ -275,7 +275,7 @@ describe('PrivateCheckout', function () {
 
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(observer))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(123n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(123n)] as const)
 			)
 
 			await expect(
@@ -356,7 +356,7 @@ describe('PrivateCheckout', function () {
 
 			await hre.cofhe.expectResultSuccess(hre.cofhe.initializeWithHardhatSigner(observer))
 			const [encCode] = await hre.cofhe.expectResultSuccess(
-				cofhejs.encrypt([Encryptable.uint256(123n)] as const)
+				cofhejs.encrypt([Encryptable.uint128(123n)] as const)
 			)
 			await checkout.connect(observer).fulfillOrder(0, encCode)
 
