@@ -1,19 +1,23 @@
-# Private Checkout — FHE Gift Cards
+# Private Checkout — Buy anything on-chain. Nobody knows what.
 
 Private gift card purchases using Fully Homomorphic Encryption on Base Sepolia. Nobody on-chain can see what you bought or the gift card code — only the buyer can decrypt it.
 
 ## How It Works
 
-1. **Buyer** encrypts their order (product + amount) and locks ETH on-chain
-2. **Observer** decrypts what to buy, purchases a gift card via Reloadly API, encrypts the code back for the buyer only
-3. **Buyer** decrypts the gift card code — it never appears in plaintext on-chain
+**Hybrid encryption: FHE + AES + IPFS**
 
-Block explorer shows opaque encrypted handles. The actual values are only visible to permitted parties.
+1. **Buyer** encrypts their order (product ID + amount) with FHE and locks ETH on-chain
+2. **Observer** decrypts product details via FHE, purchases a gift card from Reloadly API
+3. **Observer** encrypts the gift card code with a random AES-128 key, uploads the ciphertext to IPFS, then FHE-encrypts the AES key on-chain so only the buyer can decrypt it
+4. **Buyer** FHE-unseals the AES key, fetches the ciphertext from IPFS, AES-decrypts to get the gift card code
+
+The gift card code never appears in plaintext on-chain or on IPFS. Block explorer shows opaque handles. IPFS shows AES gibberish.
 
 ## Stack
 
 - **Contract**: Solidity + [Fhenix CoFHE](https://github.com/FhenixProtocol) for FHE operations
 - **Gift Cards**: [Reloadly](https://reloadly.com) sandbox API (free $1000 test balance)
+- **Storage**: IPFS via [Pinata](https://pinata.cloud) for AES-encrypted payloads
 - **Network**: Base Sepolia testnet
 - **Framework**: Hardhat + cofhe-hardhat-plugin
 
@@ -22,21 +26,25 @@ Block explorer shows opaque encrypted handles. The actual values are only visibl
 ```bash
 pnpm install
 cp .env.example .env
-# Fill in PRIVATE_KEY, OBSERVER_PRIVATE_KEY, RELOADLY_CLIENT_ID, RELOADLY_CLIENT_SECRET
+# Fill in all keys (see below)
 ```
 
-### Get Reloadly Keys (free, 2 minutes)
+### Keys You Need
 
-1. Sign up at [reloadly.com](https://reloadly.com)
-2. Toggle to **Test mode** in the dashboard sidebar
-3. Go to **Developers → API Settings**
-4. Copy sandbox `client_id` and `client_secret` into `.env`
+| Key | Where to get it |
+|-----|----------------|
+| `PRIVATE_KEY` | Buyer wallet private key (Base Sepolia ETH) |
+| `OBSERVER_PRIVATE_KEY` | Observer wallet private key (Base Sepolia ETH) |
+| `RELOADLY_CLIENT_ID` | [reloadly.com](https://reloadly.com) → Test mode → Developers → API Settings |
+| `RELOADLY_CLIENT_SECRET` | Same as above |
+| `PINATA_JWT` | [pinata.cloud](https://pinata.cloud) → API Keys → New Key |
+| `PINATA_GATEWAY` | Your Pinata gateway URL (or use `https://gateway.pinata.cloud`) |
 
 ## Run
 
 ### Full E2E Demo (single command)
 
-Deploys contract, registers observer, places encrypted order, buys gift card, fulfills, decrypts — all in one script:
+Deploys contract, registers observer, places encrypted order, buys gift card via Reloadly, encrypts with AES, uploads to IPFS, FHE-encrypts AES key, buyer decrypts everything:
 
 ```bash
 pnpm e2e          # Base Sepolia
@@ -65,36 +73,68 @@ pnpm demo
 pnpm test    # 16 tests — mock FHE environment
 ```
 
-## What's Private On-Chain
+## What's Private
 
-| Data | Visible? |
-|------|----------|
-| That a transaction happened | Yes |
-| Buyer address | Yes (msg.sender) |
-| Observer address | Yes |
-| ETH locked | Yes |
-| **What was bought (product ID)** | **No** — encrypted, only observer can decrypt |
-| **Amount / denomination** | **No** — encrypted, only observer can decrypt |
-| **Gift card code** | **No** — encrypted, only buyer can decrypt |
+| Data | Where | Visible? |
+|------|-------|----------|
+| Transaction happened | On-chain | Yes |
+| Buyer address | On-chain | Yes (msg.sender) |
+| Observer address | On-chain | Yes |
+| ETH locked | On-chain | Yes |
+| **Product ID** | On-chain | **No** — FHE-encrypted, only observer can decrypt |
+| **Amount** | On-chain | **No** — FHE-encrypted, only observer can decrypt |
+| **AES key** | On-chain | **No** — FHE-encrypted, only buyer can decrypt |
+| **Gift card code** | IPFS | **No** — AES-encrypted, needs FHE-unsealed key |
+| IPFS CID | On-chain | Yes, but ciphertext is useless without the key |
+
+## Architecture
+
+```
+Buyer                          Contract (Base Sepolia)              Observer
+  |                                  |                                |
+  |-- encrypt(productId, amount) --> |                                |
+  |-- placeOrder() + lock ETH ----> |                                |
+  |                                  |-- OrderPlaced event ---------> |
+  |                                  |                                |
+  |                                  |    unseal(productId, amount)   |
+  |                                  |    buy gift card (Reloadly)    |
+  |                                  |    AES-encrypt code            |
+  |                                  |    upload to IPFS (Pinata)     |
+  |                                  |    FHE-encrypt AES key         |
+  |                                  |                                |
+  |                                  | <-- fulfillOrder(encKey, cid)  |
+  |                                  |     ETH paid to observer       |
+  |                                  |                                |
+  |  unseal AES key (FHE)           |                                |
+  |  fetch ciphertext (IPFS)        |                                |
+  |  AES-decrypt → gift card code   |                                |
+```
 
 ## Contract
 
-`PrivateCheckout.sol` — uses `euint64` for product/amount and `euint256` for gift card codes. FHE permissions control who can decrypt what:
+`PrivateCheckout.sol` — stores orders with FHE-encrypted fields:
 
-- `FHE.allow(productId, observer)` — observer decrypts to know what to buy
-- `FHE.allow(code, buyer)` — only buyer can decrypt the gift card code
-- Nobody else (including the contract itself) can read the plaintext values
+- `euint64 encProductId` — what to buy (only observer decrypts)
+- `euint64 encAmount` — denomination (only observer decrypts)
+- `euint128 encAesKey` — AES-128 key for the gift card code (only buyer decrypts)
+- `string ipfsCid` — IPFS CID pointing to AES-encrypted gift card code
+
+Access control via `FHE.allow(handle, address)` — granular per-address permissions.
+
+Observer posts a 0.01 ETH bond. If they don't fulfill within 10 minutes, 50% gets slashed and buyer gets refunded.
 
 ## Project Structure
 
 ```
 contracts/
-  PrivateCheckout.sol     — Main contract with FHE-encrypted orders
+  PrivateCheckout.sol     — Main contract with FHE + AES key storage
 scripts/
   e2e.ts                  — Full end-to-end demo script
   demo.ts                 — Buyer-side demo
   observer.ts             — Observer fulfillment service
   giftcard.ts             — Reloadly API integration
+  crypto.ts               — AES-128-GCM encrypt/decrypt helpers
+  ipfs.ts                 — Pinata IPFS upload/fetch
 tasks/
   deploy-checkout.ts      — Deploy task
   register-observer.ts    — Observer registration task
