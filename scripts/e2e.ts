@@ -86,6 +86,14 @@ async function main() {
 	const observer = signers.length > 1 ? signers[1] : signers[0]
 	const isMock = ['hardhat', 'localhost'].includes(network.name)
 
+	const explorerBase: Record<string, string> = {
+		'base-sepolia': 'https://sepolia.basescan.org',
+		'eth-sepolia': 'https://sepolia.etherscan.io',
+	}
+	const explorer = explorerBase[network.name] || ''
+	const txLink = (hash: string) => explorer ? `  ${explorer}/tx/${hash}` : ''
+	const addrLink = (addr: string) => explorer ? `  ${explorer}/address/${addr}` : ''
+
 	// Deploy mock FHE contracts if running on local hardhat network
 	if (isMock) {
 		console.log('Deploying FHE mock contracts...\n')
@@ -105,7 +113,9 @@ async function main() {
 	const checkout = await Factory.connect(buyer).deploy()
 	await checkout.waitForDeployment()
 	const contractAddr = await checkout.getAddress()
-	console.log(`  Contract: ${contractAddr}\n`)
+	console.log(`  Contract: ${contractAddr}`)
+	if (explorer) console.log(addrLink(contractAddr))
+	console.log()
 
 	// ── 2. Register observer ───────────────────────────────
 	console.log('② Registering observer (0.01 ETH bond)...')
@@ -113,7 +123,9 @@ async function main() {
 		value: ethers.parseEther('0.01'),
 	})
 	await regTx.wait()
-	console.log(`  Tx: ${regTx.hash}\n`)
+	console.log(`  Tx: ${regTx.hash}`)
+	if (explorer) console.log(txLink(regTx.hash))
+	console.log()
 
 	// ── 3. Buyer places encrypted order ────────────────────
 	console.log('③ Buyer encrypting & placing order...')
@@ -146,6 +158,7 @@ async function main() {
 	})!.args.orderId
 
 	console.log(`  Order #${orderId} placed — Tx: ${placeTx.hash}`)
+	if (explorer) console.log(txLink(placeTx.hash))
 
 	// Show what's visible on-chain
 	const orderData = await checkout.getOrder(orderId)
@@ -188,7 +201,9 @@ async function main() {
 	console.log('  Calling fulfillOrder...')
 	const fulfillTx = await (checkout.connect(observer) as any).fulfillOrder(orderId, encCode)
 	await fulfillTx.wait()
-	console.log(`  Fulfilled! Tx: ${fulfillTx.hash}\n`)
+	console.log(`  Fulfilled! Tx: ${fulfillTx.hash}`)
+	if (explorer) console.log(txLink(fulfillTx.hash))
+	console.log()
 
 	// ── 5. Buyer decrypts the gift card code ───────────────
 	console.log('⑤ Buyer decrypting gift card code...')
@@ -197,23 +212,28 @@ async function main() {
 	const finalOrder = await checkout.getOrder(orderId)
 	console.log(`  encCode handle: ${finalOrder.encCode} (opaque — useless to anyone else)`)
 
-	const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint256)
-	console.log(`  Unseal result:`, JSON.stringify(unsealedCode))
+	let codeValue: bigint | null = null
+	for (let attempt = 1; attempt <= 10; attempt++) {
+		const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint256)
+		if (unsealedCode.data && unsealedCode.data !== 0n) {
+			codeValue = unsealedCode.data as bigint
+			break
+		}
+		console.log(`  Waiting for FHE network to process decryption... (${attempt}/10)`)
+		await new Promise((r) => setTimeout(r, 5000))
+	}
 
-	const codeValue = unsealedCode.data as bigint
-	if (!codeValue || codeValue === 0n) {
-		console.log('\n  WARNING: Unseal returned 0 — the FHE network may still be processing.')
-		console.log('  The encrypted code IS on-chain. Try decrypting again in a few seconds.')
-		console.log(`  Encoded value from observer was: ${encodedCode}`)
-		const fallbackDecoded = decodeGiftCardCode(encodedCode)
-		console.log('\n╔══════════════════════════════════════════╗')
-		console.log(`║  Gift card code: ${fallbackDecoded.padEnd(23)}║`)
-		console.log('╚══════════════════════════════════════════╝')
-		console.log('  (decoded from local value — on-chain decrypt pending)')
-	} else {
+	if (codeValue) {
 		const decoded = decodeGiftCardCode(codeValue)
 		console.log('\n╔══════════════════════════════════════════╗')
 		console.log(`║  Gift card code: ${decoded.padEnd(23)}║`)
+		console.log('╚══════════════════════════════════════════╝')
+	} else {
+		// Fallback: decode from the local value the observer had
+		const fallbackDecoded = decodeGiftCardCode(encodedCode)
+		console.log('\n  FHE network still processing — showing code from observer memory:')
+		console.log('\n╔══════════════════════════════════════════╗')
+		console.log(`║  Gift card code: ${fallbackDecoded.padEnd(23)}║`)
 		console.log('╚══════════════════════════════════════════╝')
 	}
 
