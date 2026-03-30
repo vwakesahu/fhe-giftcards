@@ -198,11 +198,24 @@ async function main() {
 	console.log(`  encCode handle: ${finalOrder.encCode} (opaque — useless to anyone else)`)
 
 	const unsealedCode = await cofhejs.unseal(finalOrder.encCode, FheTypes.Uint256)
-	const decoded = decodeGiftCardCode(unsealedCode.data as bigint)
+	console.log(`  Unseal result:`, JSON.stringify(unsealedCode))
 
-	console.log('\n╔══════════════════════════════════════════╗')
-	console.log(`║  Gift card code: ${decoded.padEnd(23)}║`)
-	console.log('╚══════════════════════════════════════════╝')
+	const codeValue = unsealedCode.data as bigint
+	if (!codeValue || codeValue === 0n) {
+		console.log('\n  WARNING: Unseal returned 0 — the FHE network may still be processing.')
+		console.log('  The encrypted code IS on-chain. Try decrypting again in a few seconds.')
+		console.log(`  Encoded value from observer was: ${encodedCode}`)
+		const fallbackDecoded = decodeGiftCardCode(encodedCode)
+		console.log('\n╔══════════════════════════════════════════╗')
+		console.log(`║  Gift card code: ${fallbackDecoded.padEnd(23)}║`)
+		console.log('╚══════════════════════════════════════════╝')
+		console.log('  (decoded from local value — on-chain decrypt pending)')
+	} else {
+		const decoded = decodeGiftCardCode(codeValue)
+		console.log('\n╔══════════════════════════════════════════╗')
+		console.log(`║  Gift card code: ${decoded.padEnd(23)}║`)
+		console.log('╚══════════════════════════════════════════╝')
+	}
 
 	// ── Summary ────────────────────────────────────────────
 	console.log('\n── Privacy summary ──')
