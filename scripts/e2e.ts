@@ -204,6 +204,7 @@ async function main() {
 	const finalOrder = await checkout.getOrder(orderId)
 	console.log(`  encAesKey handle: ${finalOrder.encAesKey} (opaque — useless without FHE permit)`)
 	console.log(`  ipfsCid on-chain: ${finalOrder.ipfsCid} (public, but data is AES-encrypted)`)
+	console.log(`  IPFS link: https://ipfs.io/ipfs/${finalOrder.ipfsCid}`)
 
 	// Step A: FHE-unseal the AES key
 	console.log('\n  Decryption steps:')
