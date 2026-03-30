@@ -42,9 +42,8 @@ export async function uploadToIpfs(payload: EncryptedPayload): Promise<string> {
 export async function fetchFromIpfs(cid: string): Promise<EncryptedPayload> {
 	// Try IPFS gateway first
 	if (!cid.startsWith('local-')) {
-		const gatewayUrl = process.env.PINATA_GATEWAY
-			? `https://${process.env.PINATA_GATEWAY}/ipfs/${cid}`
-			: `https://gateway.pinata.cloud/ipfs/${cid}`
+		const gw = (process.env.PINATA_GATEWAY || 'https://gateway.pinata.cloud').replace(/\/$/, '')
+		const gatewayUrl = gw.startsWith('http') ? `${gw}/ipfs/${cid}` : `https://${gw}/ipfs/${cid}`
 
 		const res = await fetch(gatewayUrl)
 		if (res.ok) {
