@@ -6,9 +6,11 @@ Live at **[sigill.store](https://sigill.store)**.
 
 ## Why Sigill?
 
-A sigill is a seal — the kind kings pressed in wax onto private correspondence so couriers couldn&rsquo;t read what they carried. The promise was simple: this is sealed, and opening it without permission means you broke the seal.
+> **si · gill** *(noun)* — a seal pressed in wax to keep private correspondence private.
 
-That promise mostly vanished from money. Every transaction is a postcard now — the amount, the counterparty, every downstream address, all public forever. So we made a new kind of seal, pressed in ciphertext instead of wax. It still means the same thing: what you bought is yours, and nobody opens the envelope but you.
+Kings pressed sigills onto letters so couriers couldn't read them. Monks pressed them onto ledgers so the wrong eyes couldn't skim. A sigill was a promise: this is sealed, and opening it without permission means you broke the seal.
+
+That promise mostly vanished from money. Every transaction is a postcard now — the amount, the counterparty, every downstream address, all public forever. So we went and made a new seal — pressed in ciphertext instead of wax. It still means the same thing: what you bought is yours, and nobody opens the envelope but you.
 
 ## The idea
 
