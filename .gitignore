@@ -1,9 +1,27 @@
+# deps
 node_modules
+.pnpm-store
+
+# env
 .env
-artifacts
-cache
-coverage
-types
-typechain-types
-deployments
-coverage.json
+.env.local
+.env*.local
+
+# hardhat
+packages/contracts/artifacts
+packages/contracts/cache
+packages/contracts/coverage
+packages/contracts/coverage.json
+packages/contracts/types
+packages/contracts/typechain-types
+packages/contracts/deployments/localcofhe
+
+# next
+packages/*/.next
+packages/*/out
+packages/*/next-env.d.ts
+packages/*/.turbo
+
+# misc
+.DS_Store
+*.log
