@@ -11,7 +11,7 @@ const closingLines = [
   "> no exposure",
   "> no compromise",
   ">",
-  "> sigil.sol ready \u2713",
+  "> sigill.sol ready \u2713",
   "> base sepolia: live",
   "> fhe: default \u2713",
 ];
@@ -66,7 +66,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="border-t border-border pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="font-mono text-xs text-muted-foreground">
-            sigil<span className="text-muted-foreground/40">_</span>
+            sigill<span className="text-muted-foreground/40">_</span>
           </div>
           <a
             href="https://fhenix.io"

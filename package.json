@@ -1,19 +1,19 @@
 {
-  "name": "sigil",
+  "name": "sigill",
   "version": "0.1.0",
   "private": true,
-  "description": "Sigil — private FHE-backed checkout on Base Sepolia",
+  "description": "Sigill — private FHE-backed checkout on Base Sepolia",
   "scripts": {
-    "app:dev": "pnpm --filter @sigil/app dev",
-    "app:build": "pnpm --filter @sigil/app build",
-    "app:start": "pnpm --filter @sigil/app start",
-    "landing:dev": "pnpm --filter @sigil/landing dev",
-    "landing:build": "pnpm --filter @sigil/landing build",
-    "landing:start": "pnpm --filter @sigil/landing start",
-    "contracts:compile": "pnpm --filter @sigil/contracts compile",
-    "contracts:test": "pnpm --filter @sigil/contracts test",
-    "contracts:deploy": "pnpm --filter @sigil/contracts deploy",
-    "contracts:observer": "pnpm --filter @sigil/contracts observer"
+    "app:dev": "pnpm --filter @sigill/app dev",
+    "app:build": "pnpm --filter @sigill/app build",
+    "app:start": "pnpm --filter @sigill/app start",
+    "landing:dev": "pnpm --filter @sigill/landing dev",
+    "landing:build": "pnpm --filter @sigill/landing build",
+    "landing:start": "pnpm --filter @sigill/landing start",
+    "contracts:compile": "pnpm --filter @sigill/contracts compile",
+    "contracts:test": "pnpm --filter @sigill/contracts test",
+    "contracts:deploy": "pnpm --filter @sigill/contracts deploy",
+    "contracts:observer": "pnpm --filter @sigill/contracts observer"
   },
   "engines": {
     "node": ">=20",

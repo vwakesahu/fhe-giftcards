@@ -31,17 +31,19 @@ export function Nav() {
       </motion.div>
       <div className="max-w-[1400px] mx-auto px-6 sm:px-10 py-6 flex items-center justify-between mix-blend-difference">
         <a href="/" className="font-mono text-sm text-white tracking-tight">
-          sigil<span className="text-white/40">_</span>
+          sigill<span className="text-white/40">_</span>
         </a>
         <div className="flex items-center gap-4">
           {/* <span className="font-mono text-[10px] text-white/40 uppercase tracking-[0.15em]">
             Base &middot; Fhenix CoFHE
           </span> */}
           <a
-            href="#"
+            href="https://sigill.store"
+            target="_blank"
+            rel="noopener noreferrer"
             className="font-mono text-[10px] text-white/70 hover:text-white uppercase tracking-[0.15em] border border-white/20 px-3 py-1.5 hover:border-white/60 transition-colors"
           >
-            Launch App
+            sigill.store &rarr;
           </a>
         </div>
       </div>

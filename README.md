@@ -1,10 +1,18 @@
-# Sigil
+# Sigill
 
 Private checkout using FHE on Base Sepolia. Buy a gift card — nobody on-chain can see what you bought, how much you paid, or the code you got back.
 
+Live at **[sigill.store](https://sigill.store)**.
+
+## Why Sigill?
+
+A sigill is a seal — the kind kings pressed in wax onto private correspondence so couriers couldn&rsquo;t read what they carried. The promise was simple: this is sealed, and opening it without permission means you broke the seal.
+
+That promise mostly vanished from money. Every transaction is a postcard now — the amount, the counterparty, every downstream address, all public forever. So we made a new kind of seal, pressed in ciphertext instead of wax. It still means the same thing: what you bought is yours, and nobody opens the envelope but you.
+
 ## The idea
 
-On-chain payments leak everything: the amount, the counterparty, and every address it touches afterward. Sigil hides all of that. Your browser seals the inputs with FHE, a bonded observer fulfils the order without ever learning a wallet-visible secret, and the gift card code gets delivered through an encrypted side-channel only you can open.
+On-chain payments leak everything: the amount, the counterparty, and every address it touches afterward. Sigill hides all of that. Your browser seals the inputs with FHE, a bonded observer fulfils the order without ever learning a wallet-visible secret, and the gift card code gets delivered through an encrypted side-channel only you can open.
 
 **How it flows**
 
@@ -54,7 +62,7 @@ pnpm landing:dev            # http://localhost:3000
 
 # dApp
 pnpm app:dev                # http://localhost:3000 — run one at a time,
-                            # or: pnpm --filter @sigil/app dev --port 3001
+                            # or: pnpm --filter @sigill/app dev --port 3001
 
 # Contracts
 pnpm contracts:compile      # compile Solidity

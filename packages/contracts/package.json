@@ -1,8 +1,8 @@
 {
-	"name": "@sigil/contracts",
+	"name": "@sigill/contracts",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Sigil — private checkout contracts (FHE on Base Sepolia)",
+	"description": "Sigill — private checkout contracts (FHE on Base Sepolia)",
 	"main": "index.ts",
 	"scripts": {
 		"compile": "hardhat compile",
