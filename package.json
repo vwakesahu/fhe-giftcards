@@ -1,43 +1,23 @@
 {
-	"name": "private-checkout",
-	"version": "1.0.0",
-	"description": "Private checkout flow using FHE on Base Sepolia",
-	"scripts": {
-		"compile": "hardhat compile",
-		"test": "REPORT_GAS=true hardhat test",
-		"clean": "rimraf ./artifacts ./cache ./coverage ./types ./deployments/localcofhe",
-		"deploy": "hardhat deploy-checkout --network base-sepolia",
-		"register": "hardhat register-observer --network base-sepolia",
-		"observer": "hardhat run scripts/observer.ts --network base-sepolia",
-		"demo": "hardhat run scripts/demo.ts --network base-sepolia",
-		"e2e": "hardhat run scripts/e2e.ts --network base-sepolia",
-		"e2e:local": "hardhat run scripts/e2e.ts"
-	},
-	"license": "MIT",
-	"devDependencies": {
-		"@fhenixprotocol/cofhe-contracts": "^0.0.13",
-		"@fhenixprotocol/cofhe-mock-contracts": "^0.3.1",
-		"@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
-		"@nomicfoundation/hardhat-ethers": "^3.0.0",
-		"@nomicfoundation/hardhat-toolbox": "^5.0.0",
-		"@nomicfoundation/hardhat-verify": "^2.0.0",
-		"@openzeppelin/contracts": "^5.2.0",
-		"@typechain/ethers-v6": "^0.5.0",
-		"@typechain/hardhat": "^9.0.0",
-		"@types/chai": "^4.2.0",
-		"@types/mocha": ">=9.1.0",
-		"@types/node": ">=18.0.0",
-		"chai": "^4.2.0",
-		"cofhe-hardhat-plugin": "^0.3.1",
-		"cofhejs": "^0.3.1",
-		"dotenv": "^16.4.7",
-		"ethers": "^6.13.5",
-		"hardhat": "^2.22.19",
-		"hardhat-gas-reporter": "^1.0.8",
-		"rimraf": "^5.0.0",
-		"solidity-coverage": "^0.8.0",
-		"ts-node": ">=8.0.0",
-		"typechain": "^8.3.0",
-		"typescript": ">=4.5.0"
-	}
+  "name": "sigil",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sigil — private FHE-backed checkout on Base Sepolia",
+  "scripts": {
+    "app:dev": "pnpm --filter @sigil/app dev",
+    "app:build": "pnpm --filter @sigil/app build",
+    "app:start": "pnpm --filter @sigil/app start",
+    "landing:dev": "pnpm --filter @sigil/landing dev",
+    "landing:build": "pnpm --filter @sigil/landing build",
+    "landing:start": "pnpm --filter @sigil/landing start",
+    "contracts:compile": "pnpm --filter @sigil/contracts compile",
+    "contracts:test": "pnpm --filter @sigil/contracts test",
+    "contracts:deploy": "pnpm --filter @sigil/contracts deploy",
+    "contracts:observer": "pnpm --filter @sigil/contracts observer"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.12.3"
 }
