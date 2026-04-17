@@ -4,6 +4,16 @@ Private checkout using FHE on Base Sepolia. Buy a gift card — nobody on-chain 
 
 Live at **[sigill.store](https://sigill.store)**.
 
+<p>
+  Powered by
+  <a href="https://fhenix.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="packages/landing/public/fhenix.svg">
+      <img alt="Fhenix" src="packages/landing/public/fhenix-dark.svg" height="22">
+    </picture>
+  </a>
+</p>
+
 ## Why Sigill?
 
 > **si · gill** *(noun)* — a seal pressed in wax to keep private correspondence private.
