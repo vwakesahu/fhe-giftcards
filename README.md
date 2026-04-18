@@ -121,7 +121,7 @@ The wrap step is the only place the buyer touches plaintext USDC. After that, ev
 
 ## Architecture
 
-![Architecture](docs/architecture.png)
+![Architecture](docs/architecture.svg)
 
 ## The contracts
 
