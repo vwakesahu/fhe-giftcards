@@ -1,2 +1,2 @@
-export * from './deploy-checkout'
+export * from './deploy-sigill'
 export * from './register-observer'

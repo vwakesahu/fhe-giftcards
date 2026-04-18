@@ -2,13 +2,13 @@ import { task } from 'hardhat/config'
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
 import { getDeployment } from './utils'
 
-task('register-observer', 'Register observer with bond on PrivateCheckout').setAction(
+task('register-observer', 'Register observer with bond on Sigill').setAction(
 	async (_, hre: HardhatRuntimeEnvironment) => {
 		const { ethers, network } = hre
-		const contractAddress = getDeployment(network.name, 'PrivateCheckout')
+		const contractAddress = getDeployment(network.name, 'Sigill')
 
 		if (!contractAddress) {
-			console.error(`No PrivateCheckout deployment found for ${network.name}`)
+			console.error(`No Sigill deployment found for ${network.name}`)
 			return
 		}
 
@@ -17,8 +17,8 @@ task('register-observer', 'Register observer with bond on PrivateCheckout').setA
 		console.log(`Registering observer: ${signer.address}`)
 		console.log(`Contract: ${contractAddress}`)
 
-		const checkout = await ethers.getContractAt('PrivateCheckout', contractAddress)
-		const tx = await checkout.registerObserver({ value: ethers.parseEther('0.01') })
+		const sigill = await ethers.getContractAt('Sigill', contractAddress, signer)
+		const tx = await sigill.registerObserver({ value: ethers.parseEther('0.01') })
 		const receipt = await tx.wait()
 
 		console.log(`Observer registered! Bond: 0.01 ETH`)
