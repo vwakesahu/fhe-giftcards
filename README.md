@@ -121,29 +121,7 @@ The wrap step is the only place the buyer touches plaintext USDC. After that, ev
 
 ## Architecture
 
-```
-Buyer                cUSDC (conf. ERC20)       Sigill                 Observer
-  |                       |                      |                       |
-  |-- wrap(50 USDC) --->  |                      |                       |
-  |-- approve(enc 10) ->  |                      |                       |
-  |                       |                      |                       |
-  |-- placeOrder(encPid, obs) ----------------->  |                       |
-  |                       | <-- transferFromAllowance(buyer) -- |        |
-  |                       |                      |-- OrderPlaced ----->  |
-  |                       |                      |                       |
-  |                       |                      |         unseal(pid, paid)
-  |                       |                      |         buy via Reloadly
-  |                       |                      |         AES-enc code, pin to IPFS
-  |                       |                      |         FHE-wrap AES key
-  |                       |                      |                       |
-  |                       |                      | <-- fulfillOrder(key, cid) --
-  |                       | <-- transferEncrypted(observer) --- |        |
-  |                                              |                       |
-  |  unseal AES key (FHE)                        |                       |
-  |  fetch ciphertext (IPFS)                     |                       |
-  |  AES-decrypt → code                          |                       |
-  |                                              |       requestUnwrap → claim → plain USDC
-```
+![Architecture](docs/architecture.png)
 
 ## The contracts
 
