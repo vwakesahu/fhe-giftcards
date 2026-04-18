@@ -11,9 +11,9 @@
     "landing:build": "pnpm --filter @sigill/landing build",
     "landing:start": "pnpm --filter @sigill/landing start",
     "contracts:compile": "pnpm --filter @sigill/contracts compile",
-    "contracts:test": "pnpm --filter @sigill/contracts test",
     "contracts:deploy": "pnpm --filter @sigill/contracts deploy",
-    "contracts:observer": "pnpm --filter @sigill/contracts observer"
+    "contracts:register": "pnpm --filter @sigill/contracts register",
+    "contracts:e2e": "pnpm --filter @sigill/contracts e2e"
   },
   "engines": {
     "node": ">=20",

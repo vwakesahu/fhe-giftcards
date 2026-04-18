@@ -16,15 +16,8 @@ const config: HardhatUserConfig = {
 			evmVersion: 'cancun',
 		},
 	},
-	defaultNetwork: 'hardhat',
+	defaultNetwork: 'base-sepolia',
 	networks: {
-		'eth-sepolia': {
-			url: process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia.publicnode.com',
-			accounts,
-			chainId: 11155111,
-			gasMultiplier: 1.2,
-			timeout: 60000,
-		},
 		'base-sepolia': {
 			url: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
 			accounts,
