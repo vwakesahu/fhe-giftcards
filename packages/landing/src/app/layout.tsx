@@ -17,7 +17,7 @@ const mono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Sigill",
   description:
-    "Private checkout sealed by FHE — amounts stay encrypted end-to-end on Base",
+    "Private checkout sealed by FHE, amounts stay encrypted end-to-end on Base",
 };
 
 export default function RootLayout({

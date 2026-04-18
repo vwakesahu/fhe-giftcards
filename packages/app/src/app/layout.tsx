@@ -17,7 +17,7 @@ const serif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Sigill — Private checkout sealed by FHE",
+  title: "Sigill | Private checkout sealed by FHE",
   description: "Buy a gift card with a sealed envelope. Amounts encrypted end-to-end, on Base Sepolia.",
 };
 
