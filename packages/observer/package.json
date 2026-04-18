@@ -1,0 +1,21 @@
+{
+  "name": "@sigill/observer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sigill observer daemon — watches OrderPlaced events, decrypts, fulfils",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "unwrap": "tsx src/unwrap.ts"
+  },
+  "dependencies": {
+    "cofhejs": "^0.3.1",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.0.0"
+  }
+}
