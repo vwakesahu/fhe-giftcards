@@ -99,19 +99,23 @@ async function main() {
 	const usdcAddress = process.env.USDC_ADDRESS
 	if (!usdcAddress) {
 		throw new Error(
-			'USDC_ADDRESS env var required. Circle USDC on Base Sepolia: 0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+			'USDC_ADDRESS env var required. Deploy MockUSDC first: npx hardhat deploy-usdc'
 		)
 	}
 	console.log(`① Using USDC at ${usdcAddress}`)
 	const usdc = await ethers.getContractAt(
-		['function balanceOf(address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'],
+		[
+			'function balanceOf(address) view returns (uint256)',
+			'function approve(address,uint256) returns (bool)',
+			'function mint(address,uint256)',
+		],
 		usdcAddress,
 	)
-	const buyerUsdcBalance = await usdc.balanceOf(buyer.address)
+	let buyerUsdcBalance = await usdc.balanceOf(buyer.address)
 	if (buyerUsdcBalance < 50_000_000n) {
-		throw new Error(
-			`Buyer needs >= 50 USDC. Current balance: ${Number(buyerUsdcBalance) / 1e6}. Faucet: https://faucet.circle.com/`
-		)
+		console.log(`  Buyer has ${Number(buyerUsdcBalance) / 1e6} USDC, minting 1000 from the mock...`)
+		await (await (usdc.connect(buyer) as any).mint(buyer.address, 1000_000_000n)).wait()
+		buyerUsdcBalance = await usdc.balanceOf(buyer.address)
 	}
 	console.log(`  Buyer USDC: ${Number(buyerUsdcBalance) / 1e6}\n`)
 
