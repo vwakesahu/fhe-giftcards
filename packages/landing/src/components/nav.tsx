@@ -38,12 +38,12 @@ export function Nav() {
             Base &middot; Fhenix CoFHE
           </span> */}
           <a
-            href="https://sigill.store"
+            href="https://app.sigill.store"
             target="_blank"
             rel="noopener noreferrer"
             className="font-mono text-[10px] text-white/70 hover:text-white uppercase tracking-[0.15em] border border-white/20 px-3 py-1.5 hover:border-white/60 transition-colors"
           >
-            sigill.store &rarr;
+            app.sigill.store &rarr;
           </a>
         </div>
       </div>
