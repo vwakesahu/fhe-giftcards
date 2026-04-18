@@ -24,24 +24,25 @@ That promise mostly vanished from money. Every transaction is a postcard now —
 
 ## The idea
 
-On-chain payments leak everything: the amount, the counterparty, and every address it touches afterward. Sigill hides all of that. Your browser seals the inputs with FHE, a bonded observer fulfils the order without ever learning a wallet-visible secret, and the gift card code gets delivered through an encrypted side-channel only you can open.
+On-chain payments leak everything: the amount, the counterparty, and every address it touches afterward. Sigill hides all of that. The buyer wraps plain USDC into a confidential cUSDC token, the payment amount flows as an encrypted balance update, a bonded observer fulfils the order without ever learning anything others can read, and the gift card code lands through a side-channel only the buyer can open.
 
 **How it flows**
 
-1. Buyer encrypts `productId` + `amount` in the browser and locks ETH on Base.
-2. A bonded observer gets FHE access to just those two values, decrypts privately, and buys the card from Reloadly.
-3. Observer AES-encrypts the code, pins the ciphertext to IPFS, and FHE-wraps the AES key so only the buyer can open it.
-4. Buyer unseals the AES key through FHE, fetches the ciphertext, AES-decrypts, reads the code locally.
+1. Buyer wraps USDC → cUSDC (confidential ERC-20) and `approve`s Sigill for an FHE-encrypted allowance.
+2. Buyer calls `placeOrder(encProductId, observer)`. Sigill consumes the allowance as encrypted escrow; the actual amount is never in plaintext on-chain.
+3. A bonded observer has FHE decryption permission on just the product ID and paid amount, confirms the payment covers the price, and buys the card from Reloadly.
+4. Observer AES-encrypts the code, pins the ciphertext to IPFS, and FHE-wraps the AES key so only the buyer can open it. Escrowed cUSDC is released to the observer in the same tx.
+5. Buyer unseals the AES key through FHE, fetches the ciphertext, AES-decrypts, reads the code locally. Observer later `unwrap`s their cUSDC back to plain USDC.
 
-Explorer only ever sees opaque handles. IPFS only ever sees gibberish.
+Explorer only ever sees opaque handles. IPFS only ever sees gibberish. The amount moved between buyer and observer is an encrypted balance update — nobody watching the chain can tell how much changed hands.
 
 ## What's in the monorepo
 
 ```
 packages/
   contracts/   Hardhat + Solidity + Fhenix CoFHE
-  landing/     Next.js 16 marketing site
-  app/         Next.js 16 dApp (wagmi + RainbowKit + CoFHE client)
+  landing/     Next.js marketing site
+  app/         Next.js dApp (wagmi + RainbowKit + cofhejs)
 ```
 
 pnpm workspace. Node 20+, pnpm 9+.
@@ -54,15 +55,18 @@ cp packages/contracts/.env.example   packages/contracts/.env
 cp packages/app/.env.local.example   packages/app/.env.local
 ```
 
-Things you'll need to fill in:
+What you'll need to fill in:
 
 | File | Keys | Where to get them |
 |---|---|---|
-| `packages/contracts/.env` | `PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY` | any Base Sepolia wallets with a bit of test ETH |
+| `packages/contracts/.env` | `PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY` | any Base Sepolia wallets funded with test ETH |
+| " | `USDC_ADDRESS` | prefilled — Circle's Base Sepolia USDC, faucet at [faucet.circle.com](https://faucet.circle.com) |
 | " | `RELOADLY_CLIENT_ID` + `_SECRET` | [reloadly.com](https://reloadly.com) → Test mode → Developers |
 | " | `PINATA_JWT`, `PINATA_GATEWAY` | [pinata.cloud](https://pinata.cloud) → API Keys |
-| `packages/app/.env.local` | `NEXT_PUBLIC_CHECKOUT_ADDRESS` | output of `pnpm contracts:deploy` |
-| " | `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` | public RPC works; Alchemy/Infura for less pain |
+| " | `BASE_SEPOLIA_RPC_URL` | the public endpoint is flaky; prefer Alchemy/Infura/QuickNode |
+| `packages/app/.env.local` | `NEXT_PUBLIC_SIGILL_ADDRESS`, `NEXT_PUBLIC_CUSDC_ADDRESS` | output of `pnpm contracts:deploy` |
+
+Buyer wallet needs ≥ 50 USDC (Circle faucet does 10 at a time). Observer wallet needs ≥ 0.02 ETH (0.01 bond + gas).
 
 ## Running stuff
 
@@ -73,39 +77,29 @@ Everything runs from the repo root.
 pnpm landing:dev            # http://localhost:3000
 
 # dApp
-pnpm app:dev                # http://localhost:3000 — run one at a time,
-                            # or: pnpm --filter @sigill/app dev --port 3001
+pnpm app:dev                # http://localhost:3000
 
-# Contracts
+# Contracts (all commands run against Base Sepolia — no local testing)
 pnpm contracts:compile      # compile Solidity
-pnpm contracts:test         # 16 tests, mock FHE
-pnpm contracts:deploy       # deploy PrivateCheckout to Base Sepolia
-pnpm contracts:observer     # run the observer fulfilment loop
+pnpm contracts:deploy       # deploy ConfidentialERC20 (cUSDC) + Sigill
+pnpm contracts:register     # register the observer wallet with a 0.01 ETH bond
+pnpm contracts:e2e          # full flow: deploy → register → order → fulfil → unwrap
 ```
 
 ### End-to-end demo
 
-The whole flow — deploy, register, order, observe, fulfil, decrypt — in one command:
+`pnpm contracts:e2e` drives the whole flow in one script against Base Sepolia:
 
-```bash
-cd packages/contracts
-pnpm e2e          # Base Sepolia
-pnpm e2e:local    # local hardhat with mock FHE
-```
+1. Reads `USDC_ADDRESS` from env, checks the buyer holds ≥ 50 USDC
+2. Deploys fresh `ConfidentialERC20` + `Sigill`
+3. Registers the observer with a 0.01 ETH bond
+4. Wraps 50 USDC → cUSDC, approves Sigill for an encrypted 10 USDC allowance
+5. `placeOrder(encProductId=1, observer)` — escrows cUSDC
+6. Observer decrypts the order, buys from Reloadly sandbox, hybrid-encrypts the code (AES + IPFS + FHE key), fulfils
+7. Buyer decrypts the AES key via FHE, pulls ciphertext from IPFS, recovers the code
+8. Observer `requestUnwrap` + `claimUnwrap` to pull plaintext USDC out of cUSDC
 
-### Step-by-step (two terminals)
-
-```bash
-cd packages/contracts
-
-# Terminal 1
-pnpm deploy       # 1. deploy the contract
-pnpm register     # 2. register observer with 0.01 ETH bond
-pnpm observer     # 3. start the observer — leave running
-
-# Terminal 2
-pnpm demo         # 4. place an order as the buyer
-```
+Each run takes ~2-3 minutes depending on how busy the CoFHE network is.
 
 ## What actually stays private
 
@@ -113,46 +107,71 @@ pnpm demo         # 4. place an order as the buyer
 |---|---|---|
 | Transaction happened | on-chain | yes |
 | Buyer / observer addresses | on-chain | yes |
-| ETH locked | on-chain | yes |
+| Observer bond (0.01 ETH, fixed) | on-chain | yes |
+| USDC wrap amount | on-chain | yes (pre-order) |
+| **cUSDC payment amount** | on-chain | **no — encrypted balance update** |
 | **Product ID** | on-chain | **no — FHE, observer-only** |
-| **Amount** | on-chain | **no — FHE, observer-only** |
 | **AES key** | on-chain | **no — FHE, buyer-only** |
 | **Gift card code** | IPFS | **no — AES, needs the FHE-unsealed key** |
 | IPFS CID | on-chain | yes, but useless without the key |
 
+The wrap step is the only place the buyer touches plaintext USDC — after that, everything flows as encrypted `euint64` balances and allowances.
+
 ## Architecture
 
 ```
-Buyer                        PrivateCheckout (Base)            Observer
-  |                                 |                              |
-  |-- encrypt(product, amount) -->  |                              |
-  |-- placeOrder() + lock ETH  -->  |                              |
-  |                                 |-- OrderPlaced -------------> |
-  |                                 |                              |
-  |                                 |    unseal(product, amount)   |
-  |                                 |    buy via Reloadly          |
-  |                                 |    AES-encrypt code          |
-  |                                 |    pin to IPFS               |
-  |                                 |    FHE-wrap AES key          |
-  |                                 |                              |
-  |                                 | <-- fulfillOrder(key, cid)   |
-  |                                 |     ETH -> observer          |
-  |                                 |                              |
-  |  unseal AES key (FHE)           |                              |
-  |  fetch ciphertext (IPFS)        |                              |
-  |  AES-decrypt -> code            |                              |
+Buyer                cUSDC (conf. ERC20)       Sigill                 Observer
+  |                       |                      |                       |
+  |-- wrap(50 USDC) --->  |                      |                       |
+  |-- approve(enc 10) ->  |                      |                       |
+  |                       |                      |                       |
+  |-- placeOrder(encPid, obs) ----------------->  |                       |
+  |                       | <-- transferFromAllowance(buyer) -- |        |
+  |                       |                      |-- OrderPlaced ----->  |
+  |                       |                      |                       |
+  |                       |                      |         unseal(pid, paid)
+  |                       |                      |         buy via Reloadly
+  |                       |                      |         AES-enc code, pin to IPFS
+  |                       |                      |         FHE-wrap AES key
+  |                       |                      |                       |
+  |                       |                      | <-- fulfillOrder(key, cid) --
+  |                       | <-- transferEncrypted(observer) --- |        |
+  |                                              |                       |
+  |  unseal AES key (FHE)                        |                       |
+  |  fetch ciphertext (IPFS)                     |                       |
+  |  AES-decrypt → code                          |                       |
+  |                                              |       requestUnwrap → claim → plain USDC
 ```
 
-## The contract
+## The contracts
 
-[PrivateCheckout.sol](packages/contracts/contracts/PrivateCheckout.sol) stores each order as:
+Two contracts do the work:
 
-- `euint64 encProductId` — what to buy (observer decrypts)
-- `euint64 encAmount` — denomination (observer decrypts)
-- `euint128 encAesKey` — AES-128 key for the code (buyer decrypts)
-- `string ipfsCid` — pointer to the AES-encrypted code
+**[ConfidentialERC20.sol](packages/contracts/contracts/ConfidentialERC20.sol)** — minimal ERC-7984-like wrapper over plaintext USDC.
 
-Access control is per-address through `FHE.allow(handle, address)`. Observers bond 0.01 ETH; miss the 10-minute deadline and half the bond is slashed, escrow refunds to the buyer.
+- `wrap(uint64)` — pulls plaintext USDC, credits an encrypted `euint64` balance.
+- `requestUnwrap(InEuint64)` + `claimUnwrap(id)` — two-step async burn, debits encrypted balance and later transfers plaintext USDC after FHE decryption completes.
+- `transfer` / `approve` / `transferFrom` — operate on encrypted amounts; insufficient funds silently clamp to 0 rather than revert (standard ERC-7984 semantics, preserves privacy).
+- `transferFromAllowance(from, to)` — the primitive Sigill uses: pulls the entire encrypted allowance without needing a fresh `InEuint64` passed through an intermediary (avoids the zkv signature-binding mismatch under nested `msg.sender`). The allowance zeroes on use, which makes escrow replay-safe.
+
+**[Sigill.sol](packages/contracts/contracts/Sigill.sol)** — the checkout.
+
+```solidity
+struct Order {
+  address buyer;
+  address observer;
+  euint64 encProductId;   // what to buy — observer decrypts
+  euint64 encPaid;        // cUSDC escrowed — observer decrypts to verify
+  euint128 encAesKey;     // AES-128 key for the code — buyer decrypts
+  string ipfsCid;         // pointer to AES-encrypted code
+  uint256 deadline;
+  Status status;          // Pending | Fulfilled | Refunded | Rejected
+}
+```
+
+Three settlement paths: `fulfillOrder` (observer delivers, escrow goes to observer), `rejectOrder` (honest observer declines; escrow returns to buyer, bond intact), `refund` (buyer reclaims after the 10-minute deadline; 50% of observer bond slashed).
+
+Access control uses `FHE.allow(handle, address)` per value — the observer gets ACL on `encProductId` + `encPaid`, the buyer gets ACL on `encAesKey`.
 
 ## Stack
 
@@ -160,4 +179,4 @@ Access control is per-address through `FHE.allow(handle, address)`. Observers bo
 - **Gift cards** — [Reloadly](https://reloadly.com) sandbox
 - **Storage** — IPFS via [Pinata](https://pinata.cloud)
 - **Network** — Base Sepolia
-- **Frontend** — Next.js 16, Tailwind v4, shadcn, wagmi + RainbowKit, cofhejs
+- **Frontend** — Next.js, Tailwind v4, shadcn, wagmi + RainbowKit, cofhejs
