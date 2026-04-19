@@ -343,25 +343,25 @@ export function BalancesPanel() {
         blockTag: "pending",
       });
       await new Promise((r) => setTimeout(r, 1500));
-      try {
-        const claimHash = await walletClient.writeContract({
-          address: addresses.cUSDC,
-          abi: cUSDCAbi,
-          functionName: "claimUnwrap",
-          args: [unwrapId, plain],
-          account: walletClient.account!,
-          chain: walletClient.chain,
-        });
-        const claimReceipt = await publicClient.waitForTransactionReceipt({
-          hash: claimHash,
-        });
-        if (claimReceipt.status !== "success")
-          throw new Error("claimUnwrap reverted");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!/already claimed/i.test(msg)) throw err;
-        // Observer beat us to it — funds landed anyway.
-      }
+      // try {
+      //   const claimHash = await walletClient.writeContract({
+      //     address: addresses.cUSDC,
+      //     abi: cUSDCAbi,
+      //     functionName: "claimUnwrap",
+      //     args: [unwrapId, plain],
+      //     account: walletClient.account!,
+      //     chain: walletClient.chain,
+      //   });
+      //   const claimReceipt = await publicClient.waitForTransactionReceipt({
+      //     hash: claimHash,
+      //   });
+      //   if (claimReceipt.status !== "success")
+      //     throw new Error("claimUnwrap reverted");
+      // } catch (err) {
+      //   const msg = err instanceof Error ? err.message : String(err);
+      //   if (!/already claimed/i.test(msg)) throw err;
+      //   // Observer beat us to it — funds landed anyway.
+      // }
 
       const gained = (Number(plain) / 1e6).toFixed(2);
       toast.success(`Unwrapped ${gained} USDC`);
