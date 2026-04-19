@@ -10,7 +10,15 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { decodeEventLog } from "viem";
-import { ArrowDown, Check, Droplet, Eye, EyeOff, Lock, RefreshCw } from "lucide-react";
+import {
+  ArrowDown,
+  Check,
+  Droplet,
+  Eye,
+  EyeOff,
+  Lock,
+  RefreshCw,
+} from "lucide-react";
 
 import { addresses, cUSDCAbi, usdcAbi } from "@/lib/contracts";
 import { CUsdcIcon, UsdcIcon } from "@/components/icons";
@@ -72,11 +80,9 @@ export function BalancesPanel() {
   const tooMuchUsdc = mode === "wrap" && amountRaw > (usdcBalance ?? 0n);
   const canSubmit =
     isConnected &&
-    amountRaw > 0n &&
-    !tooMuchUsdc &&
     !wrapping &&
     !unwrapping &&
-    (mode === "wrap" || hasSealed);
+    (mode === "wrap" ? amountRaw > 0n && !tooMuchUsdc : hasSealed);
 
   // Drop stale reveal if the handle rotated (e.g. after a wrap)
   const currentReveal =
@@ -211,7 +217,14 @@ export function BalancesPanel() {
   }
 
   async function handleUnwrap() {
-    if (!address || !publicClient || !walletClient || !canSubmit || mode !== "unwrap") return;
+    if (
+      !address ||
+      !publicClient ||
+      !walletClient ||
+      !canSubmit ||
+      mode !== "unwrap"
+    )
+      return;
     try {
       setUnwrapping(true);
 
@@ -219,12 +232,48 @@ export function BalancesPanel() {
       await ensureCofheInit(publicClient as any, walletClient);
       const { cofhejs, Encryptable, FheTypes } = await getCofhejs();
 
-      // 1) Encrypt amount for requestUnwrap.
-      toast.message("Encrypting unwrap amount");
-      const encRes = await cofhejs.encrypt([Encryptable.uint64(amountRaw)] as const);
+      // 0) Always unwrap the whole sealed balance. Fetch the latest handle
+      //    (defeat replica lag), unseal to get the plaintext balance, then
+      //    encrypt that exact value. Skips the "how much?" input entirely
+      //    and avoids the `_clampToBalance` silent-zero trap from
+      //    over-requesting.
+      toast.message("Reading sealed balance");
+      let latestHandle = handle;
+      for (let i = 0; i < 4; i++) {
+        const { data } = await refetchCUsdc();
+        const next = data as bigint | undefined;
+        if (next && next !== 0n) {
+          latestHandle = next;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      if (!latestHandle || latestHandle === 0n) {
+        throw new Error("No sealed balance to unwrap");
+      }
+      let sealedBalance: bigint | null = null;
+      for (let i = 0; i < 10; i++) {
+        const res = await cofhejs.unseal(latestHandle, FheTypes.Uint64);
+        if (res.data !== undefined && res.data !== null) {
+          sealedBalance = res.data as bigint;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      if (sealedBalance === null) throw new Error("Could not read sealed balance — retry");
+      if (sealedBalance === 0n) throw new Error("Sealed balance is 0 — nothing to unwrap");
+
+      // 1) Encrypt the full sealed balance for requestUnwrap.
+      toast.message(`Encrypting ${formatUsdc(sealedBalance, 2)} cUSDC`);
+      const encRes = await cofhejs.encrypt([
+        Encryptable.uint64(sealedBalance),
+      ] as const);
       if (encRes.error || !encRes.data) throw new Error(String(encRes.error));
       const [encRaw] = encRes.data;
-      const encAmount = { ...encRaw, signature: encRaw.signature as `0x${string}` };
+      const encAmount = {
+        ...encRaw,
+        signature: encRaw.signature as `0x${string}`,
+      };
 
       // 2) Submit requestUnwrap; capture the debit handle from the event so
       //    we don't have to re-read pendingUnwraps (replica lag hits hard
@@ -238,41 +287,62 @@ export function BalancesPanel() {
         account: walletClient.account!,
         chain: walletClient.chain,
       });
-      const reqReceipt = await publicClient.waitForTransactionReceipt({ hash: reqHash });
-      if (reqReceipt.status !== "success") throw new Error("requestUnwrap reverted");
+      const reqReceipt = await publicClient.waitForTransactionReceipt({
+        hash: reqHash,
+      });
+      if (reqReceipt.status !== "success")
+        throw new Error("requestUnwrap reverted");
 
       const evt = reqReceipt.logs
         .map((l) => {
           try {
-            return decodeEventLog({ abi: cUSDCAbi, data: l.data, topics: l.topics });
+            return decodeEventLog({
+              abi: cUSDCAbi,
+              data: l.data,
+              topics: l.topics,
+            });
           } catch {
             return null;
           }
         })
         .find((d) => d?.eventName === "UnwrapRequested");
-      if (!evt || !evt.args) throw new Error("UnwrapRequested event missing from receipt");
+      if (!evt || !evt.args)
+        throw new Error("UnwrapRequested event missing from receipt");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const args = evt.args as any;
       const unwrapId = args.unwrapId as bigint;
-      const handle = args.encAmountHandle as bigint;
+      const debitHandle = args.encAmountHandle as bigint;
 
       // 3) Unseal the debit handle off-chain (buyer has ACL per contract).
       toast.message("Unsealing debit");
       let plain: bigint | null = null;
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(handle, FheTypes.Uint64);
+        const res = await cofhejs.unseal(debitHandle, FheTypes.Uint64);
         if (res.data !== undefined && res.data !== null) {
           plain = res.data as bigint;
           break;
         }
         await new Promise((r) => setTimeout(r, 2500));
       }
-      if (plain === null) throw new Error("cofhejs.unseal pending — retry in a moment");
+      if (plain === null)
+        throw new Error("cofhejs.unseal pending — retry in a moment");
 
       // 4) Finalise. Either this wallet (recipient) or the observer may
       //    call claimUnwrap; the observer daemon races us and whoever gets
       //    in first wins. Treat "already claimed" as success.
+      //
+      //    Short delay + forced account sync so MetaMask catches up on
+      //    nonce/gas between the requestUnwrap mine and this send
+      //    (cofhejs's EIP-712 signature in between perturbs its poll).
+      //    Letting the wallet derive both values itself is more robust
+      //    than passing an explicit nonce, which forces viem to also
+      //    pre-compute gas and trips MetaMask's "gas price too low" gate.
       toast.message("Claiming unwrap");
+      await publicClient.getTransactionCount({
+        address: walletClient.account!.address,
+        blockTag: "pending",
+      });
+      await new Promise((r) => setTimeout(r, 1500));
       try {
         const claimHash = await walletClient.writeContract({
           address: addresses.cUSDC,
@@ -282,8 +352,11 @@ export function BalancesPanel() {
           account: walletClient.account!,
           chain: walletClient.chain,
         });
-        const claimReceipt = await publicClient.waitForTransactionReceipt({ hash: claimHash });
-        if (claimReceipt.status !== "success") throw new Error("claimUnwrap reverted");
+        const claimReceipt = await publicClient.waitForTransactionReceipt({
+          hash: claimHash,
+        });
+        if (claimReceipt.status !== "success")
+          throw new Error("claimUnwrap reverted");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!/already claimed/i.test(msg)) throw err;
@@ -297,7 +370,9 @@ export function BalancesPanel() {
       setJustUnwrapped(true);
       setTimeout(() => setJustUnwrapped(false), 2400);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message.slice(0, 140) : "Unwrap failed");
+      toast.error(
+        err instanceof Error ? err.message.slice(0, 140) : "Unwrap failed",
+      );
     } finally {
       setUnwrapping(false);
     }
@@ -351,7 +426,9 @@ export function BalancesPanel() {
         await new Promise((r) => setTimeout(r, 2500));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message.slice(0, 120) : "Refresh failed");
+      toast.error(
+        err instanceof Error ? err.message.slice(0, 120) : "Refresh failed",
+      );
     } finally {
       setRefreshingCUsdc(false);
     }
@@ -452,61 +529,74 @@ export function BalancesPanel() {
               onReveal={handleReveal}
               onHide={() => setRevealed(null)}
             />
-            <RefreshButton busy={refreshingCUsdc} onClick={handleRefreshCUsdc} />
+            <RefreshButton
+              busy={refreshingCUsdc}
+              onClick={handleRefreshCUsdc}
+            />
           </div>
         </div>
 
         {/* Wrap / Unwrap form */}
         <div className="mt-4 pt-4 border-t border-white/4">
           <div className="flex items-center justify-between gap-3">
-            <ModeToggle mode={mode} onChange={setMode} disabled={wrapping || unwrapping} />
-            <div className="flex items-center gap-1">
-              {QUICK.map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setAmount(String(v))}
-                  disabled={!isConnected}
-                  className={`h-6 px-2.5 text-[11px] font-medium rounded-full transition-colors disabled:opacity-40 ${
-                    amount === String(v)
-                      ? "bg-sp/15 text-sp"
-                      : "text-muted-foreground/55 hover:text-foreground hover:bg-white/5"
-                  }`}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <input
-              value={amount}
-              onChange={(e) =>
-                setAmount(e.target.value.replace(/[^0-9.]/g, ""))
-              }
-              inputMode="decimal"
-              placeholder="0"
-              className="w-full bg-transparent text-[24px] font-semibold tabular-nums leading-none focus:outline-none placeholder:text-muted-foreground/25"
+            <ModeToggle
+              mode={mode}
+              onChange={setMode}
+              disabled={wrapping || unwrapping}
             />
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground/55">
-              {mode === "wrap" ? <UsdcIcon size={14} /> : <CUsdcIcon size={14} />}
-              {mode === "wrap" ? "USDC" : "cUSDC"}
-            </span>
+            {mode === "wrap" && (
+              <div className="flex items-center gap-1">
+                {QUICK.map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setAmount(String(v))}
+                    disabled={!isConnected}
+                    className={`h-6 px-2.5 text-[11px] font-medium rounded-full transition-colors disabled:opacity-40 ${
+                      amount === String(v)
+                        ? "bg-sp/15 text-sp"
+                        : "text-muted-foreground/55 hover:text-foreground hover:bg-white/5"
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          {tooMuchUsdc && (
-            <p className="mt-2 text-[11.5px] text-destructive/85">
-              Exceeds your USDC balance.
-            </p>
+
+          {mode === "wrap" ? (
+            <>
+              <div className="mt-3 flex items-baseline gap-2">
+                <input
+                  value={amount}
+                  onChange={(e) =>
+                    setAmount(e.target.value.replace(/[^0-9.]/g, ""))
+                  }
+                  inputMode="decimal"
+                  placeholder="0"
+                  className="w-full bg-transparent text-[24px] font-semibold tabular-nums leading-none focus:outline-none placeholder:text-muted-foreground/25"
+                />
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground/55">
+                  <UsdcIcon size={14} />
+                  USDC
+                </span>
+              </div>
+              {tooMuchUsdc && (
+                <p className="mt-2 text-[11.5px] text-destructive/85">
+                  Exceeds your USDC balance.
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="mt-3 text-[12.5px] text-muted-foreground/60 leading-relaxed">
+              {!isConnected
+                ? "Connect your wallet to unwrap."
+                : !hasSealed
+                  ? "No sealed balance to unwrap — wrap USDC first."
+                  : "Unwraps your full sealed cUSDC balance. One signature to read the balance, one tx to request, one to claim."}
+            </div>
           )}
-          {mode === "unwrap" && !hasSealed && isConnected && (
-            <p className="mt-2 text-[11.5px] text-muted-foreground/55">
-              No sealed balance to unwrap — wrap USDC first.
-            </p>
-          )}
-          {/* {mode === "unwrap" && hasSealed && (
-            <p className="mt-2 text-[11.5px] text-muted-foreground/55">
-              Amount must not exceed your sealed cUSDC balance — anything above is silently clamped to 0.
-            </p>
-          )} */}
+
           <ActionButton
             mode={mode}
             busy={mode === "wrap" ? wrapping : unwrapping}
@@ -521,7 +611,13 @@ export function BalancesPanel() {
   );
 }
 
-function RefreshButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+function RefreshButton({
+  busy,
+  onClick,
+}: {
+  busy: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       onClick={onClick}
@@ -676,7 +772,9 @@ function ModeToggle({
             onClick={() => onChange(m)}
             disabled={disabled}
             className={`relative h-6 px-3 text-[11px] font-medium uppercase tracking-[0.06em] rounded-full transition-colors disabled:opacity-40 ${
-              active ? "text-[#050505]" : "text-muted-foreground/60 hover:text-foreground"
+              active
+                ? "text-[#050505]"
+                : "text-muted-foreground/60 hover:text-foreground"
             }`}
           >
             {active && (
@@ -711,7 +809,7 @@ function ActionButton({
 }) {
   const busyLabel = mode === "wrap" ? "Wrapping" : "Requesting";
   const doneLabel = mode === "wrap" ? "Wrapped" : "Unwrapped";
-  const idleLabel = mode === "wrap" ? "Wrap" : "Request unwrap";
+  const idleLabel = mode === "wrap" ? "Wrap" : "Unwrap all";
   return (
     <motion.button
       onClick={onClick}
@@ -759,4 +857,3 @@ function ActionButton({
     </motion.button>
   );
 }
-

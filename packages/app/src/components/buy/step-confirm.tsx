@@ -44,7 +44,7 @@ export function ConfirmStep({
         </div>
         <div className="divide-y divide-white/4">
           <Row label="Product" value={`${product.label} · $${product.face}`} sealed />
-          <Row label="You pay" value={`${product.priceUsdc}.00 USDC`} sealed />
+          <Row label="You pay" value={`${product.priceUsdc}.00 cUSDC`} sealed />
           <Row label="Observer" value={observer.name} />
           <Row label="Relay" value={shortAddr(observer.address, 6, 4)} mono />
         </div>
