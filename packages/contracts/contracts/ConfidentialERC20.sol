@@ -15,6 +15,15 @@ contract ConfidentialERC20 {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable underlying;
+    /// @notice Trusted address permitted to finalise pending unwraps by
+    ///         submitting the decrypted plaintext. Fhenix's on-chain
+    ///         `FHE.decrypt` trigger was sunset on base-sepolia and the new
+    ///         `publishDecryptResult` flow requires an SDK method (client
+    ///         `decryptForTx`) that hasn't shipped to npm yet. Until that
+    ///         arrives we delegate the unseal to a permissioned operator
+    ///         who already has `FHE.allow(debit, unwrapper)` and produces
+    ///         plaintexts off-chain via `cofhejs.unseal`.
+    address public immutable unwrapper;
     string public name;
     string public symbol;
     uint8 public immutable decimals;
@@ -31,13 +40,20 @@ contract ConfidentialERC20 {
     uint256 public nextUnwrapId;
 
     event Wrap(address indexed from, uint256 amount);
-    event UnwrapRequested(uint256 indexed unwrapId, address indexed from);
+    event UnwrapRequested(uint256 indexed unwrapId, address indexed from, uint256 encAmountHandle);
     event UnwrapClaimed(uint256 indexed unwrapId, address indexed to, uint256 amount);
     event Transfer(address indexed from, address indexed to);
     event Approval(address indexed owner, address indexed spender);
 
-    constructor(IERC20 _underlying, string memory _name, string memory _symbol) {
+    constructor(
+        IERC20 _underlying,
+        address _unwrapper,
+        string memory _name,
+        string memory _symbol
+    ) {
+        require(_unwrapper != address(0), "unwrapper=0");
         underlying = _underlying;
+        unwrapper = _unwrapper;
         name = _name;
         symbol = _symbol;
         // Mirror the underlying token's decimals so 1:1 wrapping is intuitive.
@@ -67,20 +83,21 @@ contract ConfidentialERC20 {
     }
 
     /// @notice Request an unwrap. Debits the encrypted balance immediately
-    ///         (clamped to balance) and fires an async decrypt. Caller must
-    ///         follow up with `claimUnwrap(unwrapId)` once the FHE network
-    ///         has produced the plaintext.
+    ///         (clamped to balance) and grants the trusted unwrapper decrypt
+    ///         permission on the debit handle. The unwrapper unseals the
+    ///         handle off-chain and finalises via `claimUnwrap(id, plain)`.
     function requestUnwrap(InEuint64 calldata encAmount) external returns (uint256 unwrapId) {
         euint64 amount = FHE.asEuint64(encAmount);
         euint64 debit = _clampToBalance(msg.sender, amount);
 
         _debit(msg.sender, debit);
 
-        // Give ourselves + caller visibility on the debit handle before decrypt.
+        // ACL so the contract + recipient + unwrapper can all reference the
+        // debit handle. The unwrapper uses its ACL to call `cofhejs.unseal`
+        // and get the plaintext; nobody else can read the value.
         FHE.allowThis(debit);
         FHE.allow(debit, msg.sender);
-
-        FHE.decrypt(debit);
+        FHE.allow(debit, unwrapper);
 
         unwrapId = nextUnwrapId++;
         pendingUnwraps[unwrapId] = PendingUnwrap({
@@ -88,17 +105,26 @@ contract ConfidentialERC20 {
             encAmount: debit,
             claimed: false
         });
-        emit UnwrapRequested(unwrapId, msg.sender);
+        // Emit the raw handle so off-chain listeners can unseal without a
+        // second read against `pendingUnwraps`.
+        emit UnwrapRequested(unwrapId, msg.sender, euint64.unwrap(debit));
     }
 
-    /// @notice Finalise an unwrap once the decrypt task has resolved.
-    function claimUnwrap(uint256 unwrapId) external {
+    /// @notice Finalise an unwrap. Either the trusted `unwrapper` or the
+    ///         original `recipient` may submit `plain`. Both paths are
+    ///         trusted to unseal the debit handle off-chain via cofhejs and
+    ///         pass the honest value; the recipient has ACL via
+    ///         `FHE.allow(debit, msg.sender)` set in `requestUnwrap`.
+    ///         Demo trust model until Fhenix's SDK `decryptForTx` ships, at
+    ///         which point this switches to `publishDecryptResult` verify.
+    function claimUnwrap(uint256 unwrapId, uint64 plain) external {
         PendingUnwrap storage p = pendingUnwraps[unwrapId];
         require(p.recipient != address(0), "unknown unwrap");
         require(!p.claimed, "already claimed");
-
-        (uint64 plain, bool decrypted) = FHE.getDecryptResultSafe(p.encAmount);
-        require(decrypted, "decrypt pending");
+        require(
+            msg.sender == unwrapper || msg.sender == p.recipient,
+            "Not authorised"
+        );
 
         p.claimed = true;
         if (plain > 0) {

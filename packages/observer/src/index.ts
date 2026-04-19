@@ -1,7 +1,8 @@
 import { ethers } from "ethers";
+import { cofhejs, FheTypes } from "cofhejs/node";
 
 import { config } from "./config";
-import { SigillAbi } from "./abi";
+import { CUsdcAbi, SigillAbi } from "./abi";
 import { ensureCofheInit } from "./cofhe";
 import { fulfillOne } from "./fulfill";
 
@@ -12,6 +13,7 @@ async function main() {
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);
   const wallet = new ethers.Wallet(config.privateKey, provider);
   const sigill = new ethers.Contract(config.sigillAddress, SigillAbi, wallet) as unknown as ethers.Contract;
+  const cUSDC = new ethers.Contract(config.cUSDCAddress, CUsdcAbi, wallet) as unknown as ethers.Contract;
 
   console.log("╔═════════════════════════════════════════════════╗");
   console.log("║   Sigill observer daemon                         ║");
@@ -19,6 +21,7 @@ async function main() {
   console.log(`  network  : base-sepolia`);
   console.log(`  observer : ${wallet.address}`);
   console.log(`  sigill   : ${config.sigillAddress}`);
+  console.log(`  cUSDC    : ${config.cUSDCAddress}`);
 
   // Sanity: are we bonded on this Sigill? If not, fail fast so the operator
   // registers before the loop starts wasting RPC calls.
@@ -31,6 +34,14 @@ async function main() {
     process.exit(1);
   }
   console.log(`  bond     : ${ethers.formatEther(bond)} ETH ✓`);
+
+  // Sanity: are we the cUSDC unwrapper? If so, we also finalise unwrap
+  // requests from buyers as they come in. If not, we only process orders.
+  const unwrapperOnChain: string = await cUSDC.unwrapper();
+  const isUnwrapper = unwrapperOnChain.toLowerCase() === wallet.address.toLowerCase();
+  console.log(
+    `  unwrapper: ${isUnwrapper ? "this wallet ✓" : `${unwrapperOnChain} (not us — skipping unwrap watch)`}`,
+  );
 
   // Init cofhejs once — subsequent calls are no-ops for the same wallet.
   console.log("  cofhejs  : initialising…");
@@ -62,10 +73,10 @@ async function main() {
     try {
       const latest = BigInt(await provider.getBlockNumber());
       if (latest >= fromBlock) {
-        const filter = sigill.filters.OrderPlaced!();
-        const events = await sigill.queryFilter(filter, Number(fromBlock), Number(latest));
-
-        for (const ev of events) {
+        // ── OrderPlaced → fulfil gift-card order ─────────────────────
+        const orderFilter = sigill.filters.OrderPlaced!();
+        const orderEvents = await sigill.queryFilter(orderFilter, Number(fromBlock), Number(latest));
+        for (const ev of orderEvents) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const args = (ev as any).args as {
             orderId: bigint;
@@ -75,7 +86,7 @@ async function main() {
           if (!args) continue;
           if (args.observer.toLowerCase() !== wallet.address.toLowerCase()) continue;
 
-          const key = String(args.orderId);
+          const key = `order:${args.orderId}`;
           if (inflight.has(key)) continue;
           inflight.add(key);
 
@@ -83,8 +94,31 @@ async function main() {
             await processEvent(args.orderId, sigill);
           } catch (err) {
             console.error(`[order #${args.orderId}] failed:`, err instanceof Error ? err.message : err);
-            // Leave the orderId out of inflight so the next loop retries it.
             inflight.delete(key);
+          }
+        }
+
+        // ── UnwrapRequested → finalise pending unwrap ────────────────
+        if (isUnwrapper) {
+          const unwrapFilter = cUSDC.filters.UnwrapRequested!();
+          const unwrapEvents = await cUSDC.queryFilter(unwrapFilter, Number(fromBlock), Number(latest));
+          for (const ev of unwrapEvents) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const args = (ev as any).args as
+              | { unwrapId: bigint; from: string; encAmountHandle: bigint }
+              | undefined;
+            if (!args) continue;
+
+            const key = `unwrap:${args.unwrapId}`;
+            if (inflight.has(key)) continue;
+            inflight.add(key);
+
+            try {
+              await processUnwrap(args.unwrapId, BigInt(args.encAmountHandle), args.from, cUSDC);
+            } catch (err) {
+              console.error(`[unwrap #${args.unwrapId}] failed:`, err instanceof Error ? err.message : err);
+              inflight.delete(key);
+            }
           }
         }
 
@@ -121,6 +155,33 @@ async function processEvent(orderId: bigint, sigill: ethers.Contract) {
     // next loop iteration retries this order.
     throw new Error("FHE decrypt pending — retry");
   }
+}
+
+async function processUnwrap(
+  unwrapId: bigint,
+  handle: bigint,
+  recipient: string,
+  cUSDC: ethers.Contract,
+) {
+  const prefix = `[unwrap #${unwrapId}]`;
+  console.log(`${prefix} requested by ${recipient} — unsealing handle…`);
+
+  let plain: bigint | null = null;
+  for (let i = 1; i <= 10; i++) {
+    const res = await cofhejs.unseal(handle, FheTypes.Uint64);
+    if (res.data !== undefined && res.data !== null) {
+      plain = res.data as bigint;
+      break;
+    }
+    if (i < 10) await new Promise((r) => setTimeout(r, 3_000));
+  }
+  if (plain === null) throw new Error("cofhejs.unseal pending — retry next loop");
+
+  console.log(`${prefix} plain = ${Number(plain) / 1e6} USDC, submitting claim…`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tx = await (cUSDC as any).claimUnwrap(unwrapId, plain);
+  const rc = await tx.wait();
+  console.log(`${prefix} claimed · tx=${tx.hash} · gasUsed=${rc?.gasUsed}`);
 }
 
 function sleep(ms: number) {

@@ -92,8 +92,29 @@ export const CUsdcAbi = [
     name: "claimUnwrap",
     type: "function",
     stateMutability: "nonpayable",
-    inputs: [{ name: "unwrapId", type: "uint256" }],
+    inputs: [
+      { name: "unwrapId", type: "uint256" },
+      { name: "plain", type: "uint64" },
+    ],
     outputs: [],
+  },
+  {
+    name: "pendingUnwraps",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [
+      { name: "recipient", type: "address" },
+      { name: "encAmount", type: "uint256" },
+      { name: "claimed", type: "bool" },
+    ],
+  },
+  {
+    name: "unwrapper",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
   },
   {
     type: "event",
@@ -101,6 +122,7 @@ export const CUsdcAbi = [
     inputs: [
       { name: "unwrapId", type: "uint256", indexed: true },
       { name: "from", type: "address", indexed: true },
+      { name: "encAmountHandle", type: "uint256", indexed: false },
     ],
   },
 ] as const;
