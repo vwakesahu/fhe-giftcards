@@ -25,3 +25,5 @@ packages/*/.turbo
 # misc
 .DS_Store
 *.log
+
+docs/
