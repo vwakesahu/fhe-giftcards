@@ -138,7 +138,10 @@ export const cUSDCAbi = [
     name: "claimUnwrap",
     type: "function",
     stateMutability: "nonpayable",
-    inputs: [{ name: "unwrapId", type: "uint256" }],
+    inputs: [
+      { name: "unwrapId", type: "uint256" },
+      { name: "plain", type: "uint64" },
+    ],
     outputs: [],
   },
   {
@@ -147,6 +150,7 @@ export const cUSDCAbi = [
     inputs: [
       { name: "unwrapId", type: "uint256", indexed: true },
       { name: "from", type: "address", indexed: true },
+      { name: "encAmountHandle", type: "uint256", indexed: false },
     ],
   },
   {

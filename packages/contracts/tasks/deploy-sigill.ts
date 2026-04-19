@@ -17,9 +17,23 @@ task('deploy-sigill', 'Deploy ConfidentialERC20 (cUSDC) + Sigill').setAction(
 		}
 		console.log(`Using USDC at ${usdcAddress}`)
 
+		// Trusted unwrapper (owner of the Threshold-Network-replacement role).
+		// Defaults to OBSERVER_PRIVATE_KEY's address since the observer is
+		// already a trust anchor in the Sigill flow.
+		const signers = await ethers.getSigners()
+		const unwrapperAddress =
+			process.env.UNWRAPPER_ADDRESS ??
+			(signers.length > 1 ? signers[1].address : signers[0].address)
+		console.log(`Unwrapper: ${unwrapperAddress}`)
+
 		console.log('Deploying ConfidentialERC20 (cUSDC)...')
 		const CFactory = await ethers.getContractFactory('ConfidentialERC20')
-		const cUSDC = await CFactory.deploy(usdcAddress, 'Confidential USDC', 'cUSDC')
+		const cUSDC = await CFactory.deploy(
+			usdcAddress,
+			unwrapperAddress,
+			'Confidential USDC',
+			'cUSDC'
+		)
 		await cUSDC.waitForDeployment()
 		const cUSDCAddress = await cUSDC.getAddress()
 		saveDeployment(network.name, 'ConfidentialERC20', cUSDCAddress)
