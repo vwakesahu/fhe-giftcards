@@ -51,6 +51,8 @@ packages/
   contracts/   Hardhat + Solidity + Fhenix CoFHE
   landing/     Next.js marketing site
   app/         Next.js dApp (wagmi + RainbowKit + cofhejs)
+  observer/    Node daemon that watches OrderPlaced + UnwrapRequested,
+               decrypts off-chain, buys from Reloadly, fulfils on-chain
 ```
 
 pnpm workspace. Node 20+, pnpm 9+.
@@ -159,6 +161,39 @@ Three settlement paths. `fulfillOrder` means the observer delivered, escrow goes
 
 Access control uses `FHE.allow(handle, address)` per value. The observer gets ACL on `encProductId` and `encPaid`. The buyer gets ACL on `encAesKey`. That's it.
 
+## The observer
+
+The observer is the off-chain execution layer. It watches the chain, unseals what it's been granted ACL on, and settles gift-card orders. It also acts as the trusted unwrapper for cUSDC (recipient can self-claim too; the observer is a fallback).
+
+It's a stateless Node process. Each poll iteration it re-checks on-chain status, so dedupe across restarts is free and there is no database.
+
+**What the daemon does each loop**
+
+1. `provider.getBlockNumber()` to find head.
+2. `sigill.queryFilter(OrderPlaced, fromBlock, latest)` filtered by the observer's own address.
+3. `cUSDC.queryFilter(UnwrapRequested, fromBlock, latest)` if this wallet is the registered unwrapper.
+4. For each pending order: unseal `encProductId` + `encPaid`, validate `paid ≥ unitPrice` (otherwise `rejectOrder`), buy the card from Reloadly, AES-128-GCM the code, pin the ciphertext to IPFS, FHE-encrypt the AES key, call `fulfillOrder(id, encAesKey, cid)`.
+5. For each pending unwrap: unseal the debit handle, call `claimUnwrap(id, plain)`.
+
+**Run it**
+
+```bash
+cd packages/observer
+cp .env.example .env.local
+# fill in OBSERVER_PRIVATE_KEY, SIGILL_ADDRESS, CUSDC_ADDRESS,
+# BASE_SEPOLIA_RPC_URL, RELOADLY_CLIENT_ID/_SECRET, PINATA_JWT
+pnpm install
+pnpm start          # daemon
+pnpm unwrap         # cash out: unwrap entire sealed balance
+```
+
+Reloadly and Pinata creds are both mandatory. The daemon refuses to start without them.
+
+**Observer docs**
+
+- Package README with run instructions and credential requirements: [packages/observer/README.md](packages/observer/README.md).
+- Full multi-observer network design (bond / slash / reputation / dispute layer): [docs/Decentralized Observer System.md](docs/Decentralized%20Observer%20System.md).
+
 ## Stack
 
 - **Contracts**: Solidity + [Fhenix CoFHE](https://github.com/FhenixProtocol), Hardhat
@@ -166,3 +201,4 @@ Access control uses `FHE.allow(handle, address)` per value. The observer gets AC
 - **Storage**: IPFS via [Pinata](https://pinata.cloud)
 - **Network**: Base Sepolia
 - **Frontend**: Next.js, Tailwind v4, shadcn, wagmi + RainbowKit, cofhejs
+- **Observer**: Node (tsx), ethers v6, cofhejs/node
