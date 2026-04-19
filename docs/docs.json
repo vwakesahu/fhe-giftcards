@@ -1,0 +1,36 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Sigill",
+  "colors": {
+    "primary": "#000000",
+    "light": "#FFFFFF",
+    "dark": "#000000"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "FHE Confidentiality Model"
+            ]
+          },
+          {
+            "group": "Subsystems",
+            "pages": [
+              "Decentralized Observer System"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/weshallsah/fhe-giftcards"
+    }
+  }
+}
