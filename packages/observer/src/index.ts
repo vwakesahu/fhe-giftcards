@@ -179,7 +179,7 @@ async function processUnwrap(
 
   console.log(`${prefix} plain = ${Number(plain) / 1e6} USDC, submitting claim…`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tx = await (cUSDC as any).claimUnwrap(unwrapId, plain);
+  const tx = await (cUSDC as any).claimUnwrap(unwrapId, plain, { gasLimit: 400_000n });
   const rc = await tx.wait();
   console.log(`${prefix} claimed · tx=${tx.hash} · gasUsed=${rc?.gasUsed}`);
 }

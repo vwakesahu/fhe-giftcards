@@ -8,6 +8,11 @@ import { uploadToIpfs } from "./ipfs";
 const FHE_RETRY = 10;
 const FHE_DELAY_MS = 3_000;
 
+// Base Sepolia public RPC returns CALL_EXCEPTION on estimateGas for FHE
+// transactions even when the call would succeed. Hardcode a gas ceiling so
+// ethers skips estimateGas entirely.
+const FHE_GAS_LIMIT = 800_000n;
+
 async function tryUnseal(handle: bigint, type: FheTypes): Promise<bigint | null> {
   for (let i = 1; i <= FHE_RETRY; i++) {
     const res = await cofhejs.unseal(handle, type);
@@ -27,12 +32,6 @@ type OrderView = {
   status: number;
 };
 
-/**
- * Fulfil a single Pending order. Returns `true` when the fulfillOrder tx
- * lands, `false` when the order was rejected on-chain (bad product /
- * underpayment), and `null` when the FHE network hasn't produced a plaintext
- * yet — caller should retry on the next loop.
- */
 export async function fulfillOne(
   orderId: bigint,
   order: OrderView,
@@ -50,7 +49,7 @@ export async function fulfillOne(
   const product = PRODUCT_MAP[Number(pid)];
   if (!product) {
     console.log(`${prefix} unknown productId ${pid} — rejecting`);
-    const tx = await sigill.rejectOrder(orderId, "unknown product");
+    const tx = await sigill.rejectOrder(orderId, "unknown product", { gasLimit: FHE_GAS_LIMIT });
     await tx.wait();
     return false;
   }
@@ -58,7 +57,7 @@ export async function fulfillOne(
   const expected = BigInt(product.unitPrice) * 1_000_000n;
   if (paid < expected) {
     console.log(`${prefix} paid=${paid} < expected=${expected} — rejecting`);
-    const tx = await sigill.rejectOrder(orderId, "payment below product price");
+    const tx = await sigill.rejectOrder(orderId, "payment below product price", { gasLimit: FHE_GAS_LIMIT });
     await tx.wait();
     return false;
   }
@@ -76,7 +75,7 @@ export async function fulfillOne(
   }
   const [encAesKey] = encRes.data;
 
-  const tx = await sigill.fulfillOrder(orderId, encAesKey, cid);
+  const tx = await sigill.fulfillOrder(orderId, encAesKey, cid, { gasLimit: FHE_GAS_LIMIT });
   const receipt = await tx.wait();
   console.log(`${prefix} fulfilled · tx=${tx.hash} · gasUsed=${receipt?.gasUsed}`);
   return true;
