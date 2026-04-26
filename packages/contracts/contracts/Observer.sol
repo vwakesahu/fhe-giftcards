@@ -35,6 +35,13 @@ contract Observer {
         Status status;
     }
 
+    struct ObserverDetails {
+        address observerAddress;
+        uint256 sucessRate;
+        uint256 slotLeft;
+        uint256 soltSize;
+    }
+
     uint256 private constant MIN_BOND_AMOUNT = 0.01 ether;
     uint256 public constant ORDER_TIMEOUT = 10 minutes;
     uint32 public constant PRICISION = 1000000;
@@ -47,6 +54,7 @@ contract Observer {
     mapping(address => uint256) private observerTocompeleteness;
     mapping(uint256 => address[]) private compeltenessToobserver;
     mapping(address => uint256) private orderCompeleted;
+    mapping(address => ObserverDetails) private observerDetails;
     mapping(address => uint256[]) private orderQueue; //putted orders in queue
     mapping(address => uint256) private orderIndex;
     mapping(address => uint256) private observerBondAmount; // done
@@ -58,6 +66,7 @@ contract Observer {
         observerBondAmount[msg.sender] += msg.value;
         observers.push(msg.sender);
         isObserver[msg.sender] = true;
+        observerDetails[msg.sender] = ObserverDetails(msg.sender, 0, 4, 4);
         emit ObserverRegistered(msg.sender, observerBondAmount[msg.sender]);
     }
 
@@ -83,7 +92,7 @@ contract Observer {
 
     function _placeOrder(InEuint64 calldata encProductId, address observerAddress) internal returns (uint256) {
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
-
+        require(observerDetails[observerAddress].slotLeft > 0, "Observers queue is full");
         euint64 productId = FHE.asEuint64(encProductId);
         FHE.allowThis(productId);
         FHE.allow(productId, observerAddress);
@@ -91,6 +100,7 @@ contract Observer {
         // Pull the full allowance — its value was set when the buyer called
         // approve, bound to them. transferFromAllowance returns the amount
         // actually moved (clamped by balance) and zeroes the allowance.
+        observerDetails[observerAddress].slotLeft--;
         euint64 paid = cUSDC.transferFromAllowance(msg.sender, address(this));
         FHE.allowThis(paid);
         FHE.allow(paid, observerAddress);
@@ -124,7 +134,7 @@ contract Observer {
         euint128 aesKey = FHE.asEuint128(encAesKey);
         FHE.allowThis(aesKey);
         FHE.allow(aesKey, order.buyer);
-
+        observerDetails[msg.sender].slotLeft++;
         order.encAesKey = aesKey;
         order.ipfsCid = ipfsCid;
         order.status = Status.Fulfilled;
@@ -134,6 +144,7 @@ contract Observer {
         uint256 complete = orderCompeleted[msg.sender] * 1000000;
         uint256 totalOrder = orderIndex[msg.sender] * 1000000;
         uint256 completeness = complete / (totalOrder - orderReject[msg.sender]);
+        observerDetails[msg.sender].sucessRate = completeness;
         uint256 previouscompleteness = observerTocompeleteness[msg.sender];
         observerTocompeleteness[msg.sender] = completeness;
         compeltenessToobserver[completeness].push(msg.sender);
@@ -165,6 +176,7 @@ contract Observer {
         require(msg.sender == order.observer, "Not observer");
         require(order.status == Status.Pending, "Not pending");
 
+        observerDetails[msg.sender].slotLeft++;
         order.status = Status.Rejected;
 
         FHE.allowTransient(order.encPaid, address(cUSDC));
@@ -299,5 +311,14 @@ contract Observer {
     {
         Order storage o = orders[orderId];
         return (o.buyer, o.observer, o.encProductId, o.encPaid, o.encAesKey, o.ipfsCid, o.deadline, o.status);
+    }
+
+    function getObserverDetail() external view returns (ObserverDetails[] memory) {
+        uint256 len = observers.length;
+        ObserverDetails[] memory observerList = new ObserverDetails[](len);
+        for (uint256 i = 0; i < len; i++) {
+            observerList[i] = observerDetails[observers[i]];
+        }
+        return observerList;
     }
 }

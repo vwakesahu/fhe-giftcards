@@ -45,12 +45,7 @@ contract ConfidentialERC20 {
     event Transfer(address indexed from, address indexed to);
     event Approval(address indexed owner, address indexed spender);
 
-    constructor(
-        IERC20 _underlying,
-        address _unwrapper,
-        string memory _name,
-        string memory _symbol
-    ) {
+    constructor(IERC20 _underlying, address _unwrapper, string memory _name, string memory _symbol) {
         require(_unwrapper != address(0), "unwrapper=0");
         underlying = _underlying;
         unwrapper = _unwrapper;
@@ -100,11 +95,7 @@ contract ConfidentialERC20 {
         FHE.allow(debit, unwrapper);
 
         unwrapId = nextUnwrapId++;
-        pendingUnwraps[unwrapId] = PendingUnwrap({
-            recipient: msg.sender,
-            encAmount: debit,
-            claimed: false
-        });
+        pendingUnwraps[unwrapId] = PendingUnwrap({recipient: msg.sender, encAmount: debit, claimed: false});
         // Emit the raw handle so off-chain listeners can unseal without a
         // second read against `pendingUnwraps`.
         emit UnwrapRequested(unwrapId, msg.sender, euint64.unwrap(debit));
@@ -121,10 +112,7 @@ contract ConfidentialERC20 {
         PendingUnwrap storage p = pendingUnwraps[unwrapId];
         require(p.recipient != address(0), "unknown unwrap");
         require(!p.claimed, "already claimed");
-        require(
-            msg.sender == unwrapper || msg.sender == p.recipient,
-            "Not authorised"
-        );
+        require(msg.sender == unwrapper || msg.sender == p.recipient, "Not authorised");
 
         p.claimed = true;
         if (plain > 0) {
@@ -187,11 +175,10 @@ contract ConfidentialERC20 {
     }
 
     /// @notice Spender pulls from `from`. Silently clamps to min(amount, allowance, balance).
-    function transferFrom(
-        address from,
-        address to,
-        InEuint64 calldata encAmount
-    ) external returns (euint64 transferred) {
+    function transferFrom(address from, address to, InEuint64 calldata encAmount)
+        external
+        returns (euint64 transferred)
+    {
         euint64 amount = FHE.asEuint64(encAmount);
         euint64 allowed = _allowances[from][msg.sender];
 
