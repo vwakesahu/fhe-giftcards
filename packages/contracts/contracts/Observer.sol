@@ -81,7 +81,7 @@ contract Observer {
         return (o.buyer, o.observer, o.encProductId, o.encPaid, o.encAesKey, o.ipfsCid, o.deadline, o.status);
     }
 
-    function _placeOrder(InEuint64 calldata encProductId, address observerAddress) internal {
+    function _placeOrder(InEuint64 calldata encProductId, address observerAddress) internal returns (uint256) {
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
 
         euint64 productId = FHE.asEuint64(encProductId);
@@ -111,6 +111,8 @@ contract Observer {
         emit OrderPlaced(
             orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress, deadline
         );
+
+        return orderId;
     }
 
     function _fulfillOrder(uint256 orderId, InEuint128 calldata encAesKey, string calldata ipfsCid) internal {
@@ -188,6 +190,10 @@ contract Observer {
         cUSDC.transferEncrypted(order.buyer, order.encPaid);
 
         emit OrderRefunded(orderId);
+    }
+
+    function _observerQueue(address observer) internal view returns (uint256) {
+        return orderQueue[observer].length - orderIndex[observer];
     }
 
     /*//////////////////////////////////////////////////////////////

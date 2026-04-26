@@ -36,6 +36,8 @@ contract Sigill is Observer {
     // mapping(uint256 => Order) public orders;
     // mapping(address => uint256) public observerBond;
 
+    mapping(address => uint256[]) private myOrder;
+
     uint256 public constant MIN_BOND = 0.01 ether;
     // uint256 public constant ORDER_TIMEOUT = 10 minutes;
 
@@ -69,7 +71,7 @@ contract Sigill is Observer {
     ///         buyer would be re-verified under Sigill's msg.sender inside
     ///         cUSDC's transferFrom.
     function placeOrder(InEuint64 calldata encProductId, address observerAddress) external {
-        _placeOrder(encProductId, observerAddress);
+        myOrder[msg.sender].push(_placeOrder(encProductId, observerAddress));
         // require(observerBond[observerAddress] >= MIN_BOND, "Observer not bonded");
 
         // euint64 productId = FHE.asEuint64(encProductId);
@@ -174,5 +176,9 @@ contract Sigill is Observer {
         )
     {
         return _pickNextOrder();
+    }
+
+    function observersQueue(address observer) external view returns (uint256) {
+        return _observerQueue(observer);
     }
 }
