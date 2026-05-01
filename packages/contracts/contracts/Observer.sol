@@ -5,7 +5,7 @@ import "./ConfidentialERC20.sol";
 
 contract Observer {
     event ObserverRegistered(address, uint256);
-    event OrderPlaced(
+    event OrderInProccessed(
         uint256 indexed orderId,
         address indexed buyer,
         uint256 productIdHandle,
@@ -13,15 +13,20 @@ contract Observer {
         address observer,
         uint256 deadline
     );
+    event OrderInQueued(
+        uint256 indexed orderId, address indexed buyer, uint256 productIdHandle, uint256 paidHandle, address observer
+    );
     event OrderFulfilled(uint256 indexed orderId, string ipfsCid);
     event OrderRejected(uint256 indexed orderId, string reason);
     event OrderRefunded(uint256 indexed orderId);
 
     enum Status {
         Pending,
+        Processing,
         Fulfilled,
         Refunded,
-        Rejected
+        Rejected,
+        Queued
     }
 
     struct Order {
@@ -72,7 +77,6 @@ contract Observer {
 
     function _pickNextOrder()
         internal
-        view
         returns (
             address buyer,
             address observer,
@@ -85,9 +89,23 @@ contract Observer {
         )
     {
         require(isObserver[msg.sender], "Only Observer allowed to call this");
-        require(orderIndex[msg.sender] == orderQueue[msg.sender].length, "No Orders are Pending");
-        Order storage o = orders[orderIndex[msg.sender]];
+        require(orderIndex[msg.sender] < orderQueue[msg.sender].length, "No Orders are Pending");
+        uint256 idx = orderIndex[msg.sender];
+        for (; idx < orderQueue[msg.sender].length; idx++) {
+            if (orders[orderQueue[msg.sender][idx]].status != Status.Refunded) {
+                break;
+            }
+        }
+        orderIndex[msg.sender] = idx;
+        Order storage o = orders[orderQueue[msg.sender][idx]];
+        o.status = Status.Processing;
         return (o.buyer, o.observer, o.encProductId, o.encPaid, o.encAesKey, o.ipfsCid, o.deadline, o.status);
+    }
+
+    function _nextOrderStatusUpdate(uint256 orderId) internal {
+        Order storage order = orders[orderId];
+        order.deadline = block.timestamp + ORDER_TIMEOUT;
+        order.status = Status.Pending;
     }
 
     function _placeOrder(InEuint64 calldata encProductId, address observerAddress) internal returns (uint256) {
@@ -106,22 +124,28 @@ contract Observer {
         FHE.allow(paid, observerAddress);
 
         uint256 orderId = nextOrderId++;
-        uint256 deadline = block.timestamp + ORDER_TIMEOUT;
-
         Order storage order = orders[orderId];
         order.buyer = msg.sender;
         order.observer = observerAddress;
         order.encProductId = productId;
         order.encPaid = paid;
-        order.deadline = deadline;
-        // status defaults to Pending
-        // added order in the observer queue;
+        order.deadline = block.timestamp;
         orderQueue[observerAddress].push(orderId);
-
-        emit OrderPlaced(
-            orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress, deadline
-        );
-
+        // First active order in the queue is Pending immediately with a fresh
+        // deadline; everything behind it sits Queued (deadline stays at creation
+        // time) until the head fulfils/rejects, at which point
+        // _nextOrderStatusUpdate flips the next one to Pending.
+        if (orderQueue[observerAddress].length - orderIndex[observerAddress] == 1) {
+            uint256 deadline = block.timestamp + ORDER_TIMEOUT;
+            order.deadline = deadline;
+            order.status = Status.Pending;
+            emit OrderInProccessed(
+                orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress, deadline
+            );
+        } else {
+            order.status = Status.Queued;
+            emit OrderInQueued(orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress);
+        }
         return orderId;
     }
 
@@ -167,8 +191,12 @@ contract Observer {
         // for this call only.
         FHE.allowTransient(order.encPaid, address(cUSDC));
         cUSDC.transferEncrypted(order.observer, order.encPaid);
-
         emit OrderFulfilled(orderId, ipfsCid);
+        // Promote the next entry to Pending only if there's one waiting; the
+        // queue may be drained, in which case there's nothing to update.
+        if (orderIndex[msg.sender] < orderQueue[msg.sender].length) {
+            _nextOrderStatusUpdate(orderQueue[msg.sender][orderIndex[msg.sender]]);
+        }
     }
 
     function _rejectOrder(uint256 orderId, string calldata reason) internal {
@@ -185,13 +213,24 @@ contract Observer {
         orderReject[msg.sender]++;
         orderIndex[msg.sender]++;
         emit OrderRejected(orderId, reason);
+        // Same drained-queue guard as _fulfillOrder.
+        if (orderIndex[msg.sender] < orderQueue[msg.sender].length) {
+            _nextOrderStatusUpdate(orderQueue[msg.sender][orderIndex[msg.sender]]);
+        }
     }
 
     function _refund(uint256 orderId) internal {
         Order storage order = orders[orderId];
         require(msg.sender == order.buyer, "Not buyer");
         require(block.timestamp > order.deadline, "Deadline not passed");
-        require(order.status == Status.Pending, "Not pending");
+        require(order.status != Status.Refunded, "You alredy claimed this refund");
+        require(
+            order.status != Status.Rejected, "this order is rejected by the observer and you alredy recived the fund"
+        );
+        require(
+            order.status == Status.Pending || order.status == Status.Queued || order.status != Status.Processing,
+            "Not pending"
+        );
 
         order.status = Status.Refunded;
 

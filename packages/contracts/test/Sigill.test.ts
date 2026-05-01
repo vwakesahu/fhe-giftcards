@@ -73,14 +73,16 @@ async function placeOrderWith(
     .connect(buyer)
     .placeOrder(encProductId, observer.address);
   const receipt = await tx.wait();
+  // Contract emits OrderInProccessed for the first active order in the
+  // observer's queue and OrderInQueued for everything behind it. Either one
+  // carries the orderId as the first indexed arg.
   const log = receipt!.logs.find((l) => {
     try {
-      return (
-        sigill.interface.parseLog({
-          topics: l.topics as string[],
-          data: l.data,
-        })?.name === "OrderPlaced"
-      );
+      const name = sigill.interface.parseLog({
+        topics: l.topics as string[],
+        data: l.data,
+      })?.name;
+      return name === "OrderInProccessed" || name === "OrderInQueued";
     } catch {
       return false;
     }
@@ -222,7 +224,7 @@ describe("Sigill — full E2E simulation", () => {
       ).wait();
     });
 
-    it("escrows the payment, queues the order, and emits OrderPlaced", async () => {
+    it("escrows the payment, queues the order, and emits OrderInProccessed", async () => {
       const encProductId = await encryptUint64(buyer, 7n);
 
       const tx = await sigill
@@ -288,7 +290,7 @@ describe("Sigill — full E2E simulation", () => {
         .withArgs(orderId, "ipfs://cid");
 
       const o = await sigill.getOrder(orderId);
-      expect(o.status).to.equal(1); // Fulfilled
+      expect(o.status).to.equal(2); // Fulfilled
       expect(o.ipfsCid).to.equal("ipfs://cid");
 
       await initCofhe(buyer);
@@ -359,7 +361,7 @@ describe("Sigill — full E2E simulation", () => {
         .withArgs(orderId, "price too low");
 
       const o = await sigill.getOrder(orderId);
-      expect(o.status).to.equal(3); // Rejected
+      expect(o.status).to.equal(4); // Rejected
 
       expect(
         await unsealUint64(buyer, await cUSDC.balanceOf(buyer.address)),
@@ -420,7 +422,7 @@ describe("Sigill — full E2E simulation", () => {
         .withArgs(orderId);
 
       const o = await sigill.getOrder(orderId);
-      expect(o.status).to.equal(2); // Refunded
+      expect(o.status).to.equal(3); // Refunded
 
       expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
         BOND / 2n,
@@ -815,6 +817,114 @@ describe("Sigill — full E2E simulation", () => {
       expect(await sigill.getObserverBondAmount(observer2.address)).to.equal(
         BOND,
       );
+    });
+  });
+
+  // ─── pickNextOrder: refunded entries are skipped ────────────────────────
+
+  describe("pickNextOrder skips refunded orders", () => {
+    // The new placement flow stamps a deadline on the head order only; the
+    // rest sit Queued (with deadline == creation block.timestamp) until the
+    // head fulfils/rejects and _nextOrderStatusUpdate flips the next one to
+    // Pending. Buyers can refund while either Pending (after deadline) or
+    // Queued. _pickNextOrder is expected to walk past Refunded slots and
+    // surface the next live order for the observer to work on.
+
+    async function fundExtraBuyer(b: HardhatEthersSigner) {
+      await (await usdc.connect(b).mint(b.address, 1_000_000_000n)).wait();
+      await (
+        await usdc.connect(b).approve(await cUSDC.getAddress(), WRAP_AMOUNT)
+      ).wait();
+      await (await cUSDC.connect(b).wrap(WRAP_AMOUNT)).wait();
+    }
+
+    it("walks past three refunded orders and returns the survivor", async () => {
+      // buyer + buyer2 are wrapped by the outer beforeEach; spin up two more.
+      const signers = await ethers.getSigners();
+      const buyer3 = signers[7];
+      const buyer4 = signers[8];
+      const buyers = [buyer, buyer2, buyer3, buyer4];
+      await fundExtraBuyer(buyer3);
+      await fundExtraBuyer(buyer4);
+
+      await (
+        await sigill.connect(observer).registerObserver({ value: BOND })
+      ).wait();
+
+      const orderIds: bigint[] = [];
+      for (let i = 0; i < 4; i++) {
+        orderIds.push(
+          await placeOrderWith(sigill, cUSDC, buyers[i], observer, BigInt(i + 1)),
+        );
+      }
+      expect(await sigill.getOrderQueue(observer.address)).to.deep.equal(
+        orderIds,
+      );
+
+      // Head Pending with deadline; everything behind it Queued.
+      expect((await sigill.getOrder(orderIds[0])).status).to.equal(0); // Pending
+      expect((await sigill.getOrder(orderIds[0])).deadline).to.be.greaterThan(0);
+      for (let i = 1; i < 4; i++) {
+        expect((await sigill.getOrder(orderIds[i])).status).to.equal(5); // Queued
+      }
+
+      // Push past the head's deadline so the Pending refund passes the
+      // block.timestamp > deadline check. Queued entries already satisfy it
+      // because their deadline was stamped at creation block.
+      await time.increase(ORDER_TIMEOUT + 1);
+
+      // Refund 3 of 4 — leave order 3 as the only survivor.
+      await (await sigill.connect(buyers[0]).refund(orderIds[0])).wait();
+      await (await sigill.connect(buyers[1]).refund(orderIds[1])).wait();
+      await (await sigill.connect(buyers[2]).refund(orderIds[2])).wait();
+
+      for (let i = 0; i < 3; i++) {
+        expect((await sigill.getOrder(orderIds[i])).status).to.equal(3); // Refunded
+      }
+      expect((await sigill.getOrder(orderIds[3])).status).to.equal(5); // still Queued
+
+      // Inspect the return without mutating, then commit to advance orderIndex.
+      const next = await sigill.connect(observer).pickNextOrder.staticCall();
+      expect(next.buyer).to.equal(buyers[3].address);
+      expect(next.observer).to.equal(observer.address);
+
+      await (await sigill.connect(observer).pickNextOrder()).wait();
+      // observersQueue = queue.length - orderIndex = 4 - 3 = 1.
+      expect(await sigill.observersQueue(observer.address)).to.equal(1);
+    });
+
+    it("reverts pickNextOrder when every queued entry has been refunded", async () => {
+      const signers = await ethers.getSigners();
+      const buyer3 = signers[7];
+      const buyer4 = signers[8];
+      const buyers = [buyer, buyer2, buyer3, buyer4];
+      await fundExtraBuyer(buyer3);
+      await fundExtraBuyer(buyer4);
+
+      await (
+        await sigill.connect(observer).registerObserver({ value: BOND })
+      ).wait();
+
+      const orderIds: bigint[] = [];
+      for (let i = 0; i < 4; i++) {
+        orderIds.push(
+          await placeOrderWith(sigill, cUSDC, buyers[i], observer, BigInt(i + 1)),
+        );
+      }
+
+      await time.increase(ORDER_TIMEOUT + 1);
+      for (let i = 0; i < 4; i++) {
+        await (await sigill.connect(buyers[i]).refund(orderIds[i])).wait();
+      }
+
+      // Walker runs off the end of the queue — no live order to pick.
+      await expect(sigill.connect(observer).pickNextOrder()).to.be.reverted;
+    });
+
+    it("reverts pickNextOrder when called by a non-observer", async () => {
+      await expect(
+        sigill.connect(outsider).pickNextOrder(),
+      ).to.be.revertedWith("Only Observer allowed to call this");
     });
   });
 

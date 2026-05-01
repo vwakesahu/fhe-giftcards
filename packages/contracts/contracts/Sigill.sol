@@ -163,7 +163,7 @@ contract Sigill is Observer {
 
     function pickNextOrder()
         external
-        view
+        
         returns (
             address buyer,
             address observer,
