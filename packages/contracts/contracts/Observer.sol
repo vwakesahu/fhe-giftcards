@@ -223,12 +223,8 @@ contract Observer {
         Order storage order = orders[orderId];
         require(msg.sender == order.buyer, "Not buyer");
         require(block.timestamp > order.deadline, "Deadline not passed");
-        require(order.status != Status.Refunded, "You alredy claimed this refund");
         require(
-            order.status != Status.Rejected, "this order is rejected by the observer and you alredy recived the fund"
-        );
-        require(
-            order.status == Status.Pending || order.status == Status.Queued || order.status != Status.Processing,
+            order.status == Status.Pending || order.status == Status.Queued,
             "Not pending"
         );
 
