@@ -27,6 +27,7 @@ import { CUsdcIcon, UsdcIcon } from "@/components/icons";
 import { Spinner } from "@/components/spinner";
 import { ensureCofheConnected } from "@/lib/cofhe";
 import { formatUsdc } from "@/lib/format";
+import { estimateGasWithBuffer, GAS_CEILING } from "@/lib/gas";
 import { EASE_OUT } from "@/lib/motion";
 
 const QUICK = [25, 50, 100, 500];
@@ -95,13 +96,22 @@ export function BalancesPanel() {
     try {
       setMinting(true);
       toast.message("Minting 1,000 USDC");
-      const hash = await walletClient.writeContract({
+      const mintCall = {
         address: addresses.USDC,
         abi: usdcAbi,
-        functionName: "mint",
-        args: [address, MINT_AMOUNT],
+        functionName: "mint" as const,
+        args: [address, MINT_AMOUNT] as const,
         account: walletClient.account!,
+      };
+      const mintGas = await estimateGasWithBuffer(
+        publicClient,
+        mintCall,
+        GAS_CEILING.usdcMint,
+      );
+      const hash = await walletClient.writeContract({
+        ...mintCall,
         chain: walletClient.chain,
+        gas: mintGas,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== "success")
@@ -179,13 +189,22 @@ export function BalancesPanel() {
       if (currentAllowance < amountRaw) {
         toast.message("Approving USDC (one-time)");
         const MAX_UINT256 = (1n << 256n) - 1n;
-        const approveHash = await walletClient.writeContract({
+        const approveCall = {
           address: addresses.USDC,
           abi: usdcAbi,
-          functionName: "approve",
-          args: [addresses.cUSDC, MAX_UINT256],
+          functionName: "approve" as const,
+          args: [addresses.cUSDC, MAX_UINT256] as const,
           account: walletClient.account!,
+        };
+        const approveGas = await estimateGasWithBuffer(
+          publicClient,
+          approveCall,
+          GAS_CEILING.usdcApprove,
+        );
+        const approveHash = await walletClient.writeContract({
+          ...approveCall,
           chain: walletClient.chain,
+          gas: approveGas,
         });
         const approveReceipt = await publicClient.waitForTransactionReceipt({
           hash: approveHash,
@@ -196,13 +215,22 @@ export function BalancesPanel() {
       }
 
       toast.message("Wrapping USDC → cUSDC");
-      const wrapHash = await walletClient.writeContract({
+      const wrapCall = {
         address: addresses.cUSDC,
         abi: cUSDCAbi,
-        functionName: "wrap",
-        args: [amountRaw],
+        functionName: "wrap" as const,
+        args: [amountRaw] as const,
         account: walletClient.account!,
+      };
+      const wrapGas = await estimateGasWithBuffer(
+        publicClient,
+        wrapCall,
+        GAS_CEILING.cusdcWrap,
+      );
+      const wrapHash = await walletClient.writeContract({
+        ...wrapCall,
         chain: walletClient.chain,
+        gas: wrapGas,
       });
       const wrapReceipt = await publicClient.waitForTransactionReceipt({
         hash: wrapHash,
@@ -289,13 +317,22 @@ export function BalancesPanel() {
       //    we don't have to re-read pendingUnwraps (replica lag hits hard
       //    right after the tx lands).
       toast.message("Requesting unwrap");
-      const reqHash = await walletClient.writeContract({
+      const reqCall = {
         address: addresses.cUSDC,
         abi: cUSDCAbi,
-        functionName: "requestUnwrap",
-        args: [encAmount],
+        functionName: "requestUnwrap" as const,
+        args: [encAmount] as const,
         account: walletClient.account!,
+      };
+      const reqGas = await estimateGasWithBuffer(
+        publicClient,
+        reqCall,
+        GAS_CEILING.cusdcRequestUnwrap,
+      );
+      const reqHash = await walletClient.writeContract({
+        ...reqCall,
         chain: walletClient.chain,
+        gas: reqGas,
       });
       const reqReceipt = await publicClient.waitForTransactionReceipt({
         hash: reqHash,

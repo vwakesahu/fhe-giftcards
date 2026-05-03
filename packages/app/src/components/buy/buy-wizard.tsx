@@ -18,6 +18,7 @@ import { Encryptable, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
 
 import { useObservers } from "@/hooks/use-observers";
 import { ensureCofheConnected } from "@/lib/cofhe";
+import { estimateGasWithBuffer, GAS_CEILING } from "@/lib/gas";
 import { EASE_OUT, stepVariants } from "@/lib/motion";
 import { ProductStep } from "./step-product";
 import { ObserverStep } from "./step-observer";
@@ -87,13 +88,22 @@ export function BuyWizard() {
       assertCorrectEncryptedItemInput(encAmount);
 
       toast.message("Approving cUSDC allowance");
-      const approveHash = await walletClient.writeContract({
+      const approveCall = {
         address: addresses.cUSDC,
         abi: cUSDCAbi,
-        functionName: "approve",
-        args: [addresses.sigill, encAmount],
+        functionName: "approve" as const,
+        args: [addresses.sigill, encAmount] as const,
         account: walletClient.account!,
+      };
+      const approveGas = await estimateGasWithBuffer(
+        publicClient,
+        approveCall,
+        GAS_CEILING.cusdcApprove,
+      );
+      const approveHash = await walletClient.writeContract({
+        ...approveCall,
         chain: walletClient.chain,
+        gas: approveGas,
       });
       const approveReceipt = await publicClient.waitForTransactionReceipt({
         hash: approveHash,
@@ -103,13 +113,22 @@ export function BuyWizard() {
       }
 
       toast.message("Placing order");
-      const placeHash = await walletClient.writeContract({
+      const placeCall = {
         address: addresses.sigill,
         abi: sigillAbi,
-        functionName: "placeOrder",
-        args: [encProductId, selectedObserver.address],
+        functionName: "placeOrder" as const,
+        args: [encProductId, selectedObserver.address] as const,
         account: walletClient.account!,
+      };
+      const placeGas = await estimateGasWithBuffer(
+        publicClient,
+        placeCall,
+        GAS_CEILING.sigillPlaceOrder,
+      );
+      const placeHash = await walletClient.writeContract({
+        ...placeCall,
         chain: walletClient.chain,
+        gas: placeGas,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: placeHash });
       if (receipt.status !== "success") {
