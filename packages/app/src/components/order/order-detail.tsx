@@ -24,6 +24,18 @@ const STATUS_META: Record<string, { tone: string; tint: string; headline: string
     headline: "Relay working",
     body: "The observer has decryption permission on your product + payment. Waiting for fulfilment.",
   },
+  Processing: {
+    tone: "text-sp",
+    tint: "bg-sp/6",
+    headline: "Relay working",
+    body: "The observer has pulled this order off the queue and is fulfilling it now.",
+  },
+  Queued: {
+    tone: "text-sp",
+    tint: "bg-sp/6",
+    headline: "Waitlisted",
+    body: "The observer's slot is busy with an earlier order. Yours starts as soon as it clears.",
+  },
   Fulfilled: {
     tone: "text-cyan",
     tint: "bg-cyan/6",

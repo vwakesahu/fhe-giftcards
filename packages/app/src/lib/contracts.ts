@@ -24,7 +24,7 @@ export const assertAddresses = () => {
   getEnvAddress("NEXT_PUBLIC_OBSERVER_ADDRESS");
 };
 
-// Shared InEuintXX tuple shape used by cofhejs encrypted inputs.
+// Shared InEuintXX tuple shape used by @cofhe/sdk encrypted inputs.
 const InEncStruct = [
   { name: "ctHash", type: "uint256" },
   { name: "securityZone", type: "uint8" },
@@ -200,7 +200,92 @@ export const sigillAbi = [
     outputs: [{ type: "uint256" }],
   },
   {
-    name: "observerBond",
+    name: "getObserverBondAmount",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "observer", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "MIN_BOND",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "PRICISION",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint32" }],
+  },
+  // Roster — replaces the static OBSERVERS placeholder list. Returns one
+  // ObserverDetails per registered observer. Field names mirror the contract
+  // (`sucessRate`, `soltSize` typos kept intentionally so the ABI matches).
+  {
+    name: "getObserverDetail",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        type: "tuple[]",
+        components: [
+          { name: "observerAddress", type: "address" },
+          { name: "sucessRate", type: "uint256" },
+          { name: "slotLeft", type: "uint256" },
+          { name: "soltSize", type: "uint256" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "getObservers",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address[]" }],
+  },
+  {
+    name: "getObserversCount",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "getCompleteness",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "observer", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "getOrderCompleted",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "observer", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  // Despite the name, this returns pending count (queue length minus orders
+  // already processed) — not failed count. Useful as a queue-depth indicator.
+  {
+    name: "getOrderFailed",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "observer", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "getQueueLength",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "observer", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "observersQueue",
     type: "function",
     stateMutability: "view",
     inputs: [{ name: "observer", type: "address" }],
@@ -213,9 +298,16 @@ export const sigillAbi = [
     inputs: [{ name: "orderId", type: "uint256" }],
     outputs: [],
   },
+  // Replaced the legacy `OrderPlaced` event. Sigill now emits one of two
+  // events on `placeOrder` depending on whether the picked observer has slot
+  // capacity:
+  //   • OrderInProccessed (sic — typo preserved on-chain) when slotted active
+  //   • OrderInQueued                                     when waitlisted
+  // Both carry `orderId` as the first indexed arg, which is all the buy
+  // wizard needs to navigate to the order page.
   {
     type: "event",
-    name: "OrderPlaced",
+    name: "OrderInProccessed",
     inputs: [
       { name: "orderId", type: "uint256", indexed: true },
       { name: "buyer", type: "address", indexed: true },
@@ -223,6 +315,17 @@ export const sigillAbi = [
       { name: "paidHandle", type: "uint256" },
       { name: "observer", type: "address" },
       { name: "deadline", type: "uint256" },
+    ],
+  },
+  {
+    type: "event",
+    name: "OrderInQueued",
+    inputs: [
+      { name: "orderId", type: "uint256", indexed: true },
+      { name: "buyer", type: "address", indexed: true },
+      { name: "productIdHandle", type: "uint256" },
+      { name: "paidHandle", type: "uint256" },
+      { name: "observer", type: "address" },
     ],
   },
   {
@@ -243,7 +346,16 @@ export const sigillAbi = [
   },
 ] as const;
 
-export const ORDER_STATUS = ["Pending", "Fulfilled", "Refunded", "Rejected"] as const;
+// Mirrors `enum Status` in packages/contracts/contracts/Observer.sol — the
+// indices are what `getOrder().status` returns. Keep these in lockstep.
+export const ORDER_STATUS = [
+  "Pending",    // 0
+  "Processing", // 1 — observer pulled it out of the queue, fulfillOrder in flight
+  "Fulfilled",  // 2
+  "Refunded",   // 3 — buyer reclaimed escrow after deadline
+  "Rejected",   // 4 — observer marked invalid (e.g. unknown product)
+  "Queued",     // 5 — waitlisted behind an active order on the same observer
+] as const;
 export type OrderStatus = (typeof ORDER_STATUS)[number];
 
 // Product catalogue mirrors packages/contracts/scripts/giftcard.ts
@@ -255,34 +367,35 @@ export const PRODUCTS = [
 
 export type Product = (typeof PRODUCTS)[number];
 
-// The single active observer, plus placeholders that render as "Coming soon".
-export const OBSERVERS = [
-  {
-    id: "sigill-primary",
-    name: "Sigill · Relay 01",
-    region: "US East",
-    status: "online" as const,
-    address: addresses.observer,
-  },
-  {
-    id: "placeholder-2",
-    name: "Relay 02",
-    region: "EU West",
-    status: "unavailable" as const,
-    address: null,
-  },
-  {
-    id: "placeholder-3",
-    name: "Relay 03",
-    region: "Asia Pacific",
-    status: "unavailable" as const,
-    address: null,
-  },
-  {
-    id: "placeholder-4",
-    name: "Relay 04",
-    region: "SA",
-    status: "unavailable" as const,
-    address: null,
-  },
-];
+// Scaling factor the contract uses for `sucessRate`. Mirrors `PRICISION` in
+// Observer.sol. Keep this in sync if the constant ever changes on-chain.
+export const PRICISION_DEN = 1_000_000n;
+
+// Live observer roster — fetched from `getObserverDetail()` at runtime. The
+// previous static OBSERVERS array (1 active + 3 "Coming soon" placeholders)
+// is replaced by this view-derived shape.
+export type ObserverEntry = {
+  id: string; // checksummed address — stable for keying React lists
+  address: `0x${string}`;
+  successRate: number; // 0..1 (sucessRate / PRICISION)
+  slotLeft: bigint;
+  slotSize: bigint;
+  status: "online" | "full";
+};
+
+export function toObserverEntry(raw: {
+  observerAddress: `0x${string}`;
+  sucessRate: bigint;
+  slotLeft: bigint;
+  soltSize: bigint;
+}): ObserverEntry {
+  const slotLeft = raw.slotLeft;
+  return {
+    id: raw.observerAddress,
+    address: raw.observerAddress,
+    successRate: Number((raw.sucessRate * 10000n) / PRICISION_DEN) / 10000,
+    slotLeft,
+    slotSize: raw.soltSize,
+    status: slotLeft > 0n ? "online" : "full",
+  };
+}

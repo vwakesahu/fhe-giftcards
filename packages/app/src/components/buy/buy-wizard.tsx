@@ -116,11 +116,17 @@ export function BuyWizard() {
         throw new Error("placeOrder reverted — sealed balance may be insufficient");
       }
 
+      // Sigill emits one of two events on placeOrder: OrderInProccessed (sic
+      // — typo on-chain) when the relay had a free slot, or OrderInQueued
+      // when the buyer is waitlisted. Both carry `orderId` first.
       const log = receipt.logs
         .map((l) => {
           try {
             const decoded = decodeEventLog({ abi: sigillAbi, data: l.data, topics: l.topics });
-            return decoded.eventName === "OrderPlaced" ? decoded : null;
+            return decoded.eventName === "OrderInProccessed" ||
+              decoded.eventName === "OrderInQueued"
+              ? decoded
+              : null;
           } catch {
             return null;
           }
@@ -128,9 +134,10 @@ export function BuyWizard() {
         .find(Boolean);
 
       const orderId = log?.args && "orderId" in log.args ? (log.args.orderId as bigint) : undefined;
-      if (orderId === undefined) throw new Error("Order placed but no OrderPlaced event found");
+      if (orderId === undefined) throw new Error("Order placed but no OrderInProccessed/OrderInQueued event found");
 
-      toast.success(`Order #${String(orderId)} sealed`);
+      const queued = log?.eventName === "OrderInQueued";
+      toast.success(queued ? `Order #${String(orderId)} queued` : `Order #${String(orderId)} sealed`);
       router.push(`/order/${orderId}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

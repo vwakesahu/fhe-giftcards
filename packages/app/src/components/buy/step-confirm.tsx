@@ -4,16 +4,10 @@ import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
 import { Lock, ArrowRight } from "lucide-react";
 
-import type { Product } from "@/lib/contracts";
+import type { Product, ObserverEntry } from "@/lib/contracts";
 import { EASE_OUT } from "@/lib/motion";
 import { shortAddr } from "@/lib/format";
 import { Spinner } from "@/components/spinner";
-
-type Observer = {
-  name: string;
-  region: string;
-  address: `0x${string}` | null;
-};
 
 export function ConfirmStep({
   product,
@@ -23,11 +17,15 @@ export function ConfirmStep({
   onPlace,
 }: {
   product: Product;
-  observer: Observer;
+  observer: ObserverEntry;
   placing: boolean;
   hasSealedBalance: boolean;
   onPlace: () => void;
 }) {
+  const successPct =
+    observer.successRate > 0
+      ? `${(observer.successRate * 100).toFixed(1)}%`
+      : "no track record yet";
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -45,7 +43,7 @@ export function ConfirmStep({
         <div className="divide-y divide-white/4">
           <Row label="Product" value={`${product.label} · $${product.face}`} sealed />
           <Row label="You pay" value={`${product.priceUsdc}.00 cUSDC`} sealed />
-          <Row label="Observer" value={observer.name} />
+          <Row label="Observer success" value={successPct} />
           <Row label="Relay" value={shortAddr(observer.address, 6, 4)} mono />
         </div>
         <div className="px-5 py-3 border-t border-white/4">

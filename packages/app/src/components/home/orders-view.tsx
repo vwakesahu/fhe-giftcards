@@ -19,7 +19,6 @@ type OrderRow = {
   encPaid: bigint;
   deadline: bigint;
   status: number;
-  placedAt?: bigint;
 };
 
 export function OrdersView() {
@@ -33,14 +32,27 @@ export function OrdersView() {
       if (!publicClient || !address) return [];
       const latest = await publicClient.getBlockNumber();
       const from = latest > 10_000n ? latest - 10_000n : 0n;
-      const logs = await publicClient.getContractEvents({
-        address: addresses.sigill,
-        abi: sigillAbi,
-        eventName: "OrderPlaced",
-        args: { buyer: address },
-        fromBlock: from,
-        toBlock: latest,
-      });
+      // Sigill emits OrderInProccessed (sic) for slotted-active orders and
+      // OrderInQueued for waitlisted ones. Buyer wants to see both lists.
+      const [activeLogs, queuedLogs] = await Promise.all([
+        publicClient.getContractEvents({
+          address: addresses.sigill,
+          abi: sigillAbi,
+          eventName: "OrderInProccessed",
+          args: { buyer: address },
+          fromBlock: from,
+          toBlock: latest,
+        }),
+        publicClient.getContractEvents({
+          address: addresses.sigill,
+          abi: sigillAbi,
+          eventName: "OrderInQueued",
+          args: { buyer: address },
+          fromBlock: from,
+          toBlock: latest,
+        }),
+      ]);
+      const logs = [...activeLogs, ...queuedLogs];
       const rows = await Promise.all(
         logs.map(async (log) => {
           const order = await publicClient.readContract({
@@ -57,7 +69,6 @@ export function OrdersView() {
             encPaid: order[3],
             deadline: order[6],
             status: Number(order[7]),
-            placedAt: log.args.deadline! - 600n,
           } satisfies OrderRow;
         }),
       );
@@ -146,10 +157,16 @@ function PrimaryCTA({ href, children }: { href: string; children: React.ReactNod
 // ───── Stats ────────────────────────────────────────────────
 
 function computeStats(orders: OrderRow[]) {
-  const pending = orders.filter((o) => o.status === 0).length;
-  const fulfilled = orders.filter((o) => o.status === 1).length;
-  const refunded = orders.filter((o) => o.status === 2).length;
-  const rejected = orders.filter((o) => o.status === 3).length;
+  // Matches the new Status enum (Observer.sol):
+  // 0 Pending · 1 Processing · 2 Fulfilled · 3 Refunded · 4 Rejected · 5 Queued
+  // We bucket Processing + Queued under "pending" for the stat header — both
+  // are in-flight from the buyer's POV.
+  const pending = orders.filter(
+    (o) => o.status === 0 || o.status === 1 || o.status === 5,
+  ).length;
+  const fulfilled = orders.filter((o) => o.status === 2).length;
+  const refunded = orders.filter((o) => o.status === 3).length;
+  const rejected = orders.filter((o) => o.status === 4).length;
   return { total: orders.length, pending, fulfilled, refunded, rejected };
 }
 
@@ -208,8 +225,13 @@ function Table({ rows }: { rows: OrderRow[] }) {
 
 function Row({ order, first }: { order: OrderRow; first: boolean }) {
   const status = ORDER_STATUS[order.status] ?? "Pending";
+  // Processing + Queued are both "in flight to the user" — render them with
+  // the same accent as Pending so the row colour stays consistent across the
+  // observer-side state machine transitions.
   const statusClass: Record<string, string> = {
     Pending: "text-sp bg-sp/[0.06]",
+    Processing: "text-sp bg-sp/[0.06]",
+    Queued: "text-sp bg-sp/[0.06]",
     Fulfilled: "text-cyan bg-cyan/[0.06]",
     Refunded: "text-muted-foreground/70 bg-white/[0.04]",
     Rejected: "text-destructive bg-destructive/[0.06]",

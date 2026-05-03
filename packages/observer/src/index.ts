@@ -73,10 +73,17 @@ async function main() {
     try {
       const latest = BigInt(await provider.getBlockNumber());
       if (latest >= fromBlock) {
-        // ── OrderPlaced → fulfil gift-card order ─────────────────────
-        const orderFilter = sigill.filters.OrderPlaced!();
-        const orderEvents = await sigill.queryFilter(orderFilter, Number(fromBlock), Number(latest));
-        for (const ev of orderEvents) {
+        // ── OrderInProccessed / OrderInQueued → fulfil gift-card order ─
+        // Sigill emits the former when the relay had a free slot, the
+        // latter when the buyer is waitlisted. Either way, this observer
+        // wallet is on the hook if it matches the order's `observer` arg.
+        const activeFilter = sigill.filters.OrderInProccessed!();
+        const queuedFilter = sigill.filters.OrderInQueued!();
+        const [activeEvents, queuedEvents] = await Promise.all([
+          sigill.queryFilter(activeFilter, Number(fromBlock), Number(latest)),
+          sigill.queryFilter(queuedFilter, Number(fromBlock), Number(latest)),
+        ]);
+        for (const ev of [...activeEvents, ...queuedEvents]) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const args = (ev as any).args as {
             orderId: bigint;

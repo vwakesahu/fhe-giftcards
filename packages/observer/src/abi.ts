@@ -16,10 +16,10 @@ export const SigillAbi = [
     outputs: [],
   },
   {
-    name: "observerBond",
+    name: "getObserverBondAmount",
     type: "function",
     stateMutability: "view",
-    inputs: [{ name: "", type: "address" }],
+    inputs: [{ name: "observer", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
   {
@@ -59,9 +59,12 @@ export const SigillAbi = [
     ],
     outputs: [],
   },
+  // Sigill emits one of two events on placeOrder depending on whether the
+  // picked observer had a free slot. Both carry orderId as the first indexed
+  // arg, which is all the daemon needs to dispatch.
   {
     type: "event",
-    name: "OrderPlaced",
+    name: "OrderInProccessed",
     inputs: [
       { name: "orderId", type: "uint256", indexed: true },
       { name: "buyer", type: "address", indexed: true },
@@ -69,6 +72,17 @@ export const SigillAbi = [
       { name: "paidHandle", type: "uint256", indexed: false },
       { name: "observer", type: "address", indexed: false },
       { name: "deadline", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "OrderInQueued",
+    inputs: [
+      { name: "orderId", type: "uint256", indexed: true },
+      { name: "buyer", type: "address", indexed: true },
+      { name: "productIdHandle", type: "uint256", indexed: false },
+      { name: "paidHandle", type: "uint256", indexed: false },
+      { name: "observer", type: "address", indexed: false },
     ],
   },
 ] as const;
