@@ -197,6 +197,10 @@ Reloadly and Pinata creds are both mandatory. The daemon refuses to start withou
 - Package README with run instructions and credential requirements: [packages/observer/README.md](packages/observer/README.md).
 - Full multi-observer network design (bond / slash / reputation / dispute layer): [docs/Decentralized Observer System.md](docs/Decentralized%20Observer%20System.md).
 
+## Fees
+
+Not finalised yet. We're still working out how the observer and protocol get paid: leading proposal is a small fixed-plus-percentage protocol fee combined with an observer-set markup that buyers see in the relay picker. Slashing rules and bond sizing are still in flux too. Working draft, with examples and open questions, is in [docs/fee-model.md](docs/fee-model.md).
+
 ## Stack
 
 - **Contracts**: Solidity + [Fhenix CoFHE](https://github.com/FhenixProtocol), Hardhat
