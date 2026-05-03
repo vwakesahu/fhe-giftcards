@@ -133,6 +133,7 @@ Better margin in absolute terms. Protocol takes 0.34% of the order. Buyer pays a
 - **How does the observer publish their fee?** Two options. Inline in `Observer` struct (cheap to read, expensive to update). Off-chain signed message indexed by the app (cheap to update, requires app to verify signature on display). We'll start with inline since the gas cost is one-time at registration.
 - **Disputes.** Today the buyer has no recourse if the observer delivers an invalid code. The redemption code is unsealable only by the buyer, so observer can't be challenged on-chain. Possible future: optional buyer attestation that releases the bond gradually rather than immediately on `claimUnwrap`. Not in scope for the initial fee model.
 - **Reloadly margin volatility.** Reloadly pricing isn't fixed; some products carry a 5–8% wholesale spread, others 2–3%. Observer needs to either price per-product or run with a buffer. Probably the latter is simpler.
+- **Reputation field is currently broken on-chain.** The `sucessRate` accumulator in `Observer.sol`'s `_fulfillOrder` cancels out its own precision multiplier (`(completed * 1e6) / (orderIndex * 1e6 - reject)`), so it collapses to ~1 for any observer with at least one fulfilment. The app sidesteps this by reading `getOrderCompleted(addr)` directly and showing the absolute count. Fix is one line in the contract; needs a redeploy. Until then, the rate-based ranking proposed above can't be enforced — we have count, not rate. Address before reputation-weighted routing ships.
 
 ## What ships first
 
