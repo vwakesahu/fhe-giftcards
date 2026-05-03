@@ -1,34 +1,19 @@
 /**
  * End-to-end test of the Sigill confidential-checkout flow with cUSDC payment.
  *
- * Flow:
- *   1. Deploy MockUSDC (local) or use USDC_ADDRESS (testnet)
- *   2. Deploy ConfidentialERC20 (cUSDC) and Sigill
- *   3. Buyer wraps USDC → cUSDC, approves Sigill for an encrypted amount
- *   4. Buyer places order (encrypted productId + encrypted payment amount)
- *   5. Observer decrypts productId + paid amount, calls Reloadly for the code,
- *      hybrid-encrypts it (AES + IPFS + FHE AES key), fulfils order
- *   6. Sigill transfers the escrowed cUSDC to observer
- *   7. Buyer decrypts AES key via FHE, pulls ciphertext from IPFS, recovers code
+ * Same flow as e2e-cusdc.ts, but rewritten on top of @cofhe/sdk v0.5+
+ * (createCofheConfig / createCofheClient + HardhatSignerAdapter, decryptForView
+ * + permit-based unsealing) instead of the legacy cofhejs API.
  */
-import { Encryptable } from "@cofhe/sdk";
-import { createCofheConfig, createCofheClient } from "@cofhe/sdk/node";
 import hre from "hardhat";
-import {
-  CoFheInUint64,
-  cofhejs,
-  // Encryptable,
-  FheTypes,
-  type AbstractProvider,
-  type AbstractSigner,
-} from "cofhejs/node";
+import { Encryptable, FheTypes, type CofheClient } from "@cofhe/sdk";
+import { createCofheConfig, createCofheClient } from "@cofhe/sdk/node";
+import { HardhatSignerAdapter } from "@cofhe/sdk/adapters";
+import { chains } from "@cofhe/sdk/chains";
 
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-import { TypedDataField } from "ethers";
-
 import { purchaseGiftCard, PRODUCT_MAP } from "./giftcard";
-
 import {
   generateAesKey,
   aesKeyToBigInt,
@@ -36,55 +21,49 @@ import {
   aesEncrypt,
   aesDecrypt,
 } from "./crypto";
-
 import { uploadToIpfs, fetchFromIpfs } from "./ipfs";
 
-function wrapSigner(signer: HardhatEthersSigner): {
-  provider: AbstractProvider;
-  signer: AbstractSigner;
-} {
-  const provider: AbstractProvider = {
-    call: async (...args) => signer.provider.call(...args),
-    getChainId: async () =>
-      (await signer.provider.getNetwork()).chainId.toString(),
-    send: async (...args) => signer.provider.send(...args),
-  };
-  const abstractSigner: AbstractSigner = {
-    signTypedData: async (domain, types, value) =>
-      signer.signTypedData(
-        domain,
-        types as Record<string, TypedDataField[]>,
-        value,
-      ),
-    getAddress: async () => signer.getAddress(),
-    provider,
-    sendTransaction: async (...args) => {
-      const tx = await signer.sendTransaction(...args);
-      return tx.hash;
-    },
-  };
-  return { provider, signer: abstractSigner };
+const NETWORK_TO_CHAIN: Record<string, (typeof chains)[keyof typeof chains]> = {
+  "eth-sepolia": chains.sepolia,
+  "arb-sepolia": chains.arbSepolia,
+  "base-sepolia": chains.baseSepolia,
+};
+
+const NETWORK_TO_EXPLORER: Record<string, string> = {
+  "eth-sepolia": "https://sepolia.etherscan.io",
+  "arb-sepolia": "https://sepolia.arbiscan.io",
+  "base-sepolia": "https://sepolia.basescan.org",
+};
+
+let client: CofheClient;
+
+async function connect(signer: HardhatEthersSigner) {
+  const { publicClient, walletClient } = await HardhatSignerAdapter(signer);
+  await client.connect(publicClient, walletClient);
+  // Ensure an active self-permit exists for this (chainId, account) so
+  // decryptForView().withPermit() can resolve it later.
+  await client.permits.getOrCreateSelfPermit();
 }
 
-async function initCofhe(signer: HardhatEthersSigner) {
-  const wrapped = wrapSigner(signer);
-  const result = await cofhejs.initialize({
-    provider: wrapped.provider,
-    signer: wrapped.signer,
-    environment: "TESTNET",
-  });
-  if (result.error) throw new Error(`cofhejs init failed: ${result.error}`);
-  return result.data;
-}
-async function tryUnseal<T extends bigint>(
+async function tryDecrypt<U extends FheTypes>(
   handle: bigint,
-  type: FheTypes,
+  utype: U,
   tries = 10,
   delayMs = 5000,
-): Promise<T | null> {
+): Promise<bigint | boolean | string | null> {
   for (let i = 1; i <= tries; i++) {
-    const res = await cofhejs.unseal(handle, type);
-    if (res.data !== undefined && res.data !== null) return res.data as T;
+    try {
+      const result = await client
+        .decryptForView(handle, utype)
+        .withPermit()
+        .execute();
+      if (result !== undefined && result !== null) return result as any;
+    } catch (err) {
+      // Swallow — likely "not yet decrypted" / 404 from CoFHE; retry.
+      if (i === tries) {
+        console.log(`  decryptForView failed after ${tries} tries:`, err);
+      }
+    }
     if (i < tries) {
       console.log(`  FHE network processing... (${i}/${tries})`);
       await new Promise((r) => setTimeout(r, delayMs));
@@ -95,20 +74,23 @@ async function tryUnseal<T extends bigint>(
 
 async function main() {
   const { ethers, network } = hre;
-  // if (network.name !== "base-sepolia") {
-  //   throw new Error(
-  //     `This script runs on base-sepolia only (got: ${network.name})`,
-  //   );
-  // }
 
-  const SUPPORTED_NETWORKS = ["base-sepolia", "arb-sepolia", "eth-sepolia"];
-  if (!SUPPORTED_NETWORKS.includes(network.name)) {
+  const cofheChain = NETWORK_TO_CHAIN[network.name];
+  if (!cofheChain) {
     throw new Error(
-      `This script runs on a CoFHE testnet (${SUPPORTED_NETWORKS.join(
+      `This script runs on a CoFHE testnet (${Object.keys(NETWORK_TO_CHAIN).join(
         ", ",
       )}); got: ${network.name}`,
     );
   }
+
+  const explorer = NETWORK_TO_EXPLORER[network.name];
+  const txLink = (hash: string) => `  ${explorer}/tx/${hash}`;
+
+  // Build the shared CoFHE client up front; we reconnect it per-signer below.
+  const config = createCofheConfig({ supportedChains: [cofheChain] });
+  client = createCofheClient(config);
+
   const signers = await ethers.getSigners();
   if (signers.length < 2) {
     throw new Error(
@@ -118,13 +100,10 @@ async function main() {
   const buyer = signers[0];
   const observer = signers[1];
 
-  const explorer = "https://sepolia.basescan.org";
-  const txLink = (hash: string) => `  ${explorer}/tx/${hash}`;
-
   console.log("╔══════════════════════════════════════════╗");
-  console.log("║   Sigill — cUSDC E2E Flow                ║");
+  console.log("║   Sigill — cUSDC E2E Flow (cofhe SDK)    ║");
   console.log("╚══════════════════════════════════════════╝");
-  console.log(`Network : ${network.name}`);
+  console.log(`Network : ${network.name} (${cofheChain.id})`);
   console.log(`Buyer   : ${buyer.address}`);
   console.log(`Observer: ${observer.address}\n`);
 
@@ -161,9 +140,6 @@ async function main() {
   // ── 2. Deploy cUSDC + Sigill ──────────────────────────
   console.log("② Deploying ConfidentialERC20 (cUSDC)...");
   const CFactory = await ethers.getContractFactory("ConfidentialERC20");
-  // Observer doubles as the trusted unwrapper — it already holds an FHE ACL
-  // on the unwrap-debit handle and is the natural off-chain unsealer for
-  // claimUnwrap.
   const cUSDC = await CFactory.connect(buyer).deploy(
     usdcAddress,
     observer.address,
@@ -189,7 +165,7 @@ async function main() {
   });
   await regTx.wait();
   console.log(`  Tx: ${regTx.hash}`);
-  if (explorer) console.log(txLink(regTx.hash));
+  console.log(txLink(regTx.hash));
   console.log();
 
   // ── 4. Buyer wraps USDC → cUSDC ───────────────────────
@@ -208,31 +184,12 @@ async function main() {
 
   // ── 5. Buyer approves Sigill, then places order ───────
   console.log("⑤ Buyer approves Sigill to pull cUSDC (encrypted allowance)...");
-  await initCofhe(buyer);
-  const encryptable = Encryptable.uint64(PAY_AMOUNT);
+  await connect(buyer);
 
-  // console.log("encryptable :-", encryptable);
+  const [encApprove] = await client
+    .encryptInputs([Encryptable.uint64(PAY_AMOUNT)])
+    .execute();
 
-  // const [encrypted] = await cofheClient
-  //   .encryptInputs([Encryptable.uint64(10n)])
-  //   .execute();
-
-  // console.log("encrypted methods 1 :-", encrypted);
-
-  const logState = (state: any) => {
-    console.log(`Log Encrypt State :: ${state}`);
-  };
-
-  let result: any = await cofhejs.encrypt(
-    [Encryptable.uint64(PAY_AMOUNT)],
-    logState,
-  );
-  console.log("result from fhe docs methods :-", result);
-
-  const enc_amount = await cofhejs.encrypt([encryptable] as const);
-  console.log("encrypted amount", enc_amount);
-
-  const [encApprove] = await hre.cofhe.expectResultSuccess(enc_amount);
   await (
     await (cUSDC.connect(buyer) as any).approve(sigillAddress, encApprove)
   ).wait();
@@ -241,9 +198,9 @@ async function main() {
   console.log("⑥ Buyer places order...");
   console.log("  productId=1 (test gift card)");
 
-  const [encProductId] = await hre.cofhe.expectResultSuccess(
-    cofhejs.encrypt([Encryptable.uint64(1n)] as const),
-  );
+  const [encProductId] = await client
+    .encryptInputs([Encryptable.uint64(1n)])
+    .execute();
 
   const placeTx = await (sigill.connect(buyer) as any).placeOrder(
     encProductId,
@@ -251,27 +208,32 @@ async function main() {
   );
   const placeReceipt = await placeTx.wait();
 
-  const placeLog = placeReceipt!.logs.find((log: any) => {
+  // Sigill emits OrderInProccessed (active) or OrderInQueued (queued behind
+  // another order for the same observer). Either carries `orderId` as the
+  // first indexed arg.
+  const ORDER_EVENTS = new Set(["OrderInProccessed", "OrderInQueued"]);
+  let orderId: bigint | undefined;
+  for (const log of placeReceipt!.logs) {
     try {
-      return (
-        sigill.interface.parseLog({
-          topics: log.topics as string[],
-          data: log.data,
-        })?.name === "OrderPlaced"
-      );
+      const parsed = sigill.interface.parseLog({
+        topics: log.topics as string[],
+        data: log.data,
+      });
+      if (parsed && ORDER_EVENTS.has(parsed.name)) {
+        orderId = parsed.args.orderId;
+        break;
+      }
     } catch {
-      return false;
+      /* not a Sigill event */
     }
-  });
-  const orderId = sigill.interface.parseLog({
-    topics: placeLog!.topics as string[],
-    data: placeLog!.data,
-  })!.args.orderId;
+  }
+  if (orderId === undefined) {
+    throw new Error("placeOrder tx emitted no OrderInProccessed/OrderInQueued");
+  }
   console.log(`  Order #${orderId} placed — Tx: ${placeTx.hash}`);
-  if (explorer) console.log(txLink(placeTx.hash));
+  console.log(txLink(placeTx.hash));
 
-  // Base Sepolia public RPC has replica lag after a tx — retry the order
-  // read until it reflects the newly placed order.
+  // Public RPC may have replica lag — retry the order read.
   let orderData: any;
   for (let i = 1; i <= 10; i++) {
     orderData = await sigill.getOrder(orderId);
@@ -296,13 +258,17 @@ async function main() {
 
   // ── 7. Observer decrypts product + payment ────────────
   console.log("⑦ Observer decrypting order details...");
-  await initCofhe(observer);
+  await connect(observer);
 
-  const pid = await tryUnseal<bigint>(orderData.encProductId, FheTypes.Uint64);
-  const paid = await tryUnseal<bigint>(orderData.encPaid, FheTypes.Uint64);
+  const pid = (await tryDecrypt(orderData.encProductId, FheTypes.Uint64)) as
+    | bigint
+    | null;
+  const paid = (await tryDecrypt(orderData.encPaid, FheTypes.Uint64)) as
+    | bigint
+    | null;
 
   if (pid === null || paid === null) {
-    throw new Error("Failed to unseal product/paid — FHE network delay?");
+    throw new Error("Failed to decrypt product/paid — FHE network delay?");
   }
   console.log(`  Decrypted productId: ${pid}`);
   console.log(`  Decrypted payment  : ${Number(paid) / 1e6} USDC`);
@@ -311,7 +277,6 @@ async function main() {
   if (!product) throw new Error(`Unknown product ID: ${pid}`);
   console.log(`  Product: ${product.label}`);
 
-  // Verify payment covers price (simplified: 1:1 with unitPrice in USD)
   const expectedPrice = BigInt(product.unitPrice) * 1_000_000n;
   if (paid < expectedPrice) {
     console.log(
@@ -323,7 +288,7 @@ async function main() {
     );
     await rejectTx.wait();
     console.log(`  Rejected — buyer refunded. Tx: ${rejectTx.hash}`);
-    if (explorer) console.log(txLink(rejectTx.hash));
+    console.log(txLink(rejectTx.hash));
     return;
   }
 
@@ -342,9 +307,9 @@ async function main() {
   console.log(`  IPFS CID: ${ipfsCid}`);
 
   const aesKeyBigInt = aesKeyToBigInt(aesKey);
-  const [encAesKey] = await hre.cofhe.expectResultSuccess(
-    cofhejs.encrypt([Encryptable.uint128(aesKeyBigInt)] as const),
-  );
+  const [encAesKey] = await client
+    .encryptInputs([Encryptable.uint128(aesKeyBigInt)])
+    .execute();
 
   console.log("\n⑨ Fulfilling order (releases escrowed cUSDC to observer)...");
   const fulfillTx = await (sigill.connect(observer) as any).fulfillOrder(
@@ -354,17 +319,17 @@ async function main() {
   );
   await fulfillTx.wait();
   console.log(`  Fulfilled! Tx: ${fulfillTx.hash}`);
-  if (explorer) console.log(txLink(fulfillTx.hash));
+  console.log(txLink(fulfillTx.hash));
 
   // ── 10. Buyer decrypts ─────────────────────────────────
   console.log("\n⑩ Buyer decrypting gift card code...");
-  await initCofhe(buyer);
+  await connect(buyer);
   const finalOrder = await sigill.getOrder(orderId);
 
-  const aesKeyValue = await tryUnseal<bigint>(
+  const aesKeyValue = (await tryDecrypt(
     finalOrder.encAesKey,
     FheTypes.Uint128,
-  );
+  )) as bigint | null;
   if (aesKeyValue === null) {
     console.log("\n  FHE network still processing — retry later.");
     console.log(`  IPFS CID: ${finalOrder.ipfsCid}`);
@@ -382,23 +347,22 @@ async function main() {
 
   // ── 11. Observer unwraps cUSDC payment → plaintext USDC ──
   console.log("\n⑪ Observer unwrapping cUSDC payment → USDC...");
-  await initCofhe(observer);
+  await connect(observer);
 
   const observerUsdcBefore = await usdc.balanceOf(observer.address);
   console.log(`  Observer USDC before: ${Number(observerUsdcBefore) / 1e6}`);
 
-  const [encUnwrapAmount] = await hre.cofhe.expectResultSuccess(
-    cofhejs.encrypt([Encryptable.uint64(PAY_AMOUNT)] as const),
-  );
+  const [encUnwrapAmount] = await client
+    .encryptInputs([Encryptable.uint64(PAY_AMOUNT)])
+    .execute();
 
   const requestTx = await (cUSDC.connect(observer) as any).requestUnwrap(
     encUnwrapAmount,
   );
   const requestReceipt = await requestTx.wait();
   console.log(`  requestUnwrap tx: ${requestTx.hash}`);
-  if (explorer) console.log(txLink(requestTx.hash));
+  console.log(txLink(requestTx.hash));
 
-  // Parse UnwrapRequested event to get the unwrapId
   const unwrapLog = requestReceipt!.logs.find((log: any) => {
     try {
       return (
@@ -417,15 +381,14 @@ async function main() {
   })!.args;
   const unwrapId = unwrapArgs.unwrapId;
   const debitHandle = BigInt(unwrapArgs.encAmountHandle);
-  console.log(`  Unwrap #${unwrapId} requested, unsealing debit handle...`);
+  console.log(`  Unwrap #${unwrapId} requested, decrypting debit handle...`);
 
-  // New contract flow: the trusted unwrapper (= observer) unseals the debit
-  // handle off-chain via cofhejs and submits the plaintext to claimUnwrap.
-  // The previous on-chain FHE.decrypt trigger was sunset on Base Sepolia.
-  const debitPlain = await tryUnseal<bigint>(debitHandle, FheTypes.Uint64);
+  const debitPlain = (await tryDecrypt(debitHandle, FheTypes.Uint64)) as
+    | bigint
+    | null;
   if (debitPlain === null) {
     console.log(
-      "\n  FHE network still processing — retry claimUnwrap later with the unsealed value.",
+      "\n  FHE network still processing — retry claimUnwrap later with the decrypted value.",
     );
     return;
   }
@@ -437,7 +400,7 @@ async function main() {
   );
   await claimTx.wait();
   console.log(`  Claimed! Tx: ${claimTx.hash}`);
-  if (explorer) console.log(txLink(claimTx.hash));
+  console.log(txLink(claimTx.hash));
 
   const observerUsdcAfter = await usdc.balanceOf(observer.address);
   console.log(`  Observer USDC after : ${Number(observerUsdcAfter) / 1e6}`);
