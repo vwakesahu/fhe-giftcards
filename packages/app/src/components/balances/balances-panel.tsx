@@ -27,7 +27,7 @@ import { CUsdcIcon, UsdcIcon } from "@/components/icons";
 import { Spinner } from "@/components/spinner";
 import { ensureCofheConnected } from "@/lib/cofhe";
 import { formatUsdc } from "@/lib/format";
-import { estimateGasWithBuffer, GAS_CEILING } from "@/lib/gas";
+import { simulateAndGetGas, GAS_CEILING } from "@/lib/gas";
 import { EASE_OUT } from "@/lib/motion";
 
 const QUICK = [25, 50, 100, 500];
@@ -103,7 +103,7 @@ export function BalancesPanel() {
         args: [address, MINT_AMOUNT] as const,
         account: walletClient.account!,
       };
-      const mintGas = await estimateGasWithBuffer(
+      const mintGas = await simulateAndGetGas(
         publicClient,
         mintCall,
         GAS_CEILING.usdcMint,
@@ -196,7 +196,7 @@ export function BalancesPanel() {
           args: [addresses.cUSDC, MAX_UINT256] as const,
           account: walletClient.account!,
         };
-        const approveGas = await estimateGasWithBuffer(
+        const approveGas = await simulateAndGetGas(
           publicClient,
           approveCall,
           GAS_CEILING.usdcApprove,
@@ -222,7 +222,7 @@ export function BalancesPanel() {
         args: [amountRaw] as const,
         account: walletClient.account!,
       };
-      const wrapGas = await estimateGasWithBuffer(
+      const wrapGas = await simulateAndGetGas(
         publicClient,
         wrapCall,
         GAS_CEILING.cusdcWrap,
@@ -324,7 +324,7 @@ export function BalancesPanel() {
         args: [encAmount] as const,
         account: walletClient.account!,
       };
-      const reqGas = await estimateGasWithBuffer(
+      const reqGas = await simulateAndGetGas(
         publicClient,
         reqCall,
         GAS_CEILING.cusdcRequestUnwrap,

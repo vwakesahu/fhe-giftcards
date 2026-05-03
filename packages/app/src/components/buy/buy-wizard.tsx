@@ -18,7 +18,7 @@ import { Encryptable, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
 
 import { useObservers } from "@/hooks/use-observers";
 import { ensureCofheConnected } from "@/lib/cofhe";
-import { estimateGasWithBuffer, GAS_CEILING } from "@/lib/gas";
+import { simulateAndGetGas, GAS_CEILING } from "@/lib/gas";
 import { EASE_OUT, stepVariants } from "@/lib/motion";
 import { ProductStep } from "./step-product";
 import { ObserverStep } from "./step-observer";
@@ -95,7 +95,7 @@ export function BuyWizard() {
         args: [addresses.sigill, encAmount] as const,
         account: walletClient.account!,
       };
-      const approveGas = await estimateGasWithBuffer(
+      const approveGas = await simulateAndGetGas(
         publicClient,
         approveCall,
         GAS_CEILING.cusdcApprove,
@@ -120,7 +120,7 @@ export function BuyWizard() {
         args: [encProductId, selectedObserver.address] as const,
         account: walletClient.account!,
       };
-      const placeGas = await estimateGasWithBuffer(
+      const placeGas = await simulateAndGetGas(
         publicClient,
         placeCall,
         GAS_CEILING.sigillPlaceOrder,
