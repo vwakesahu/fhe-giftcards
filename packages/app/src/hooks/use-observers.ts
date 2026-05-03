@@ -1,6 +1,6 @@
 "use client";
 
-import { useReadContract } from "wagmi";
+import { useReadContract, useReadContracts } from "wagmi";
 
 import {
   addresses,
@@ -17,8 +17,9 @@ type RawObserver = {
 };
 
 /**
- * Live observer roster from Sigill's `getObserverDetail()` view.
- * Returns one entry per registered observer plus the loading state.
+ * Live observer roster from Sigill's `getObserverDetail()` view, augmented
+ * with each observer's `getOrderCompleted` count. We bypass the contract's
+ * `sucessRate` field because its arithmetic is broken (see contracts.ts).
  *
  * Refetches every 15s so the UI catches new registrations and slot churn
  * without forcing the user to refresh.
@@ -29,7 +30,12 @@ export function useObservers(): {
   error: Error | null;
   refetch: () => void;
 } {
-  const { data, isLoading, error, refetch } = useReadContract({
+  const {
+    data: rawList,
+    isLoading: rosterLoading,
+    error: rosterError,
+    refetch: refetchRoster,
+  } = useReadContract({
     address: addresses.sigill,
     abi: sigillAbi,
     functionName: "getObserverDetail",
@@ -40,19 +46,46 @@ export function useObservers(): {
     },
   });
 
-  const observers = ((data ?? []) as readonly RawObserver[]).map((r) =>
-    toObserverEntry({
+  const list = (rawList ?? []) as readonly RawObserver[];
+
+  const {
+    data: completedList,
+    isLoading: countsLoading,
+    error: countsError,
+    refetch: refetchCounts,
+  } = useReadContracts({
+    contracts: list.map((r) => ({
+      address: addresses.sigill,
+      abi: sigillAbi,
+      functionName: "getOrderCompleted",
+      args: [r.observerAddress],
+    })),
+    query: {
+      enabled: list.length > 0 && !!addresses.sigill,
+      refetchInterval: 15_000,
+      staleTime: 5_000,
+    },
+  });
+
+  const observers = list.map((r, i) => {
+    const cell = completedList?.[i];
+    const ordersCompleted =
+      cell?.status === "success" ? (cell.result as bigint) : 0n;
+    return toObserverEntry({
       observerAddress: r.observerAddress,
-      sucessRate: r.sucessRate,
       slotLeft: r.slotLeft,
       soltSize: r.soltSize,
-    }),
-  );
+      ordersCompleted,
+    });
+  });
 
   return {
     observers,
-    isLoading,
-    error: (error as Error | null) ?? null,
-    refetch: () => void refetch(),
+    isLoading: rosterLoading || countsLoading,
+    error: ((rosterError ?? countsError) as Error | null) ?? null,
+    refetch: () => {
+      void refetchRoster();
+      void refetchCounts();
+    },
   };
 }

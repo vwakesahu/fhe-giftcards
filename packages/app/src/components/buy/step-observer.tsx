@@ -85,10 +85,10 @@ function ObserverRow({
   onSelect: () => void;
 }) {
   const disabled = observer.status !== "online";
-  const successPct =
-    observer.successRate > 0
-      ? `${(observer.successRate * 100).toFixed(1)}%`
-      : "—";
+  const completedLabel =
+    observer.ordersCompleted > 0n
+      ? `${observer.ordersCompleted} fulfilled`
+      : "new relay";
   const queueLabel = `${observer.slotLeft.toString()}/${observer.slotSize.toString()} slots`;
 
   return (
@@ -124,7 +124,7 @@ function ObserverRow({
           Relay {String(index + 1).padStart(2, "0")}
         </p>
         <p className="mt-0.5 text-[12px] text-muted-foreground/55 tabular-nums">
-          Success {successPct} · {queueLabel}
+          {completedLabel} · {queueLabel}
         </p>
       </div>
       <span className="font-mono text-[12px] text-muted-foreground/55 truncate">

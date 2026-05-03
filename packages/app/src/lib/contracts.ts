@@ -367,17 +367,20 @@ export const PRODUCTS = [
 
 export type Product = (typeof PRODUCTS)[number];
 
-// Scaling factor the contract uses for `sucessRate`. Mirrors `PRICISION` in
-// Observer.sol. Keep this in sync if the constant ever changes on-chain.
-export const PRICISION_DEN = 1_000_000n;
-
 // Live observer roster — fetched from `getObserverDetail()` at runtime. The
 // previous static OBSERVERS array (1 active + 3 "Coming soon" placeholders)
 // is replaced by this view-derived shape.
+//
+// We deliberately do NOT use the contract's `sucessRate` field. The on-chain
+// math in `_fulfillOrder` cancels out the precision multiplier:
+//   completeness = (orderCompleted * 1e6) / (orderIndex * 1e6 - orderReject)
+// which collapses to ~1 for any observer with ≥1 fulfillment. Until that's
+// fixed and redeployed, the app reads `getOrderCompleted(addr)` directly and
+// shows the absolute count instead of a percentage.
 export type ObserverEntry = {
   id: string; // checksummed address — stable for keying React lists
   address: `0x${string}`;
-  successRate: number; // 0..1 (sucessRate / PRICISION)
+  ordersCompleted: bigint; // from getOrderCompleted(addr)
   slotLeft: bigint;
   slotSize: bigint;
   status: "online" | "full";
@@ -385,15 +388,15 @@ export type ObserverEntry = {
 
 export function toObserverEntry(raw: {
   observerAddress: `0x${string}`;
-  sucessRate: bigint;
   slotLeft: bigint;
   soltSize: bigint;
+  ordersCompleted: bigint;
 }): ObserverEntry {
   const slotLeft = raw.slotLeft;
   return {
     id: raw.observerAddress,
     address: raw.observerAddress,
-    successRate: Number((raw.sucessRate * 10000n) / PRICISION_DEN) / 10000,
+    ordersCompleted: raw.ordersCompleted,
     slotLeft,
     slotSize: raw.soltSize,
     status: slotLeft > 0n ? "online" : "full",

@@ -22,9 +22,9 @@ export function ConfirmStep({
   hasSealedBalance: boolean;
   onPlace: () => void;
 }) {
-  const successPct =
-    observer.successRate > 0
-      ? `${(observer.successRate * 100).toFixed(1)}%`
+  const completedLabel =
+    observer.ordersCompleted > 0n
+      ? `${observer.ordersCompleted} order${observer.ordersCompleted === 1n ? "" : "s"} fulfilled`
       : "no track record yet";
   return (
     <motion.div
@@ -43,7 +43,7 @@ export function ConfirmStep({
         <div className="divide-y divide-white/4">
           <Row label="Product" value={`${product.label} · $${product.face}`} sealed />
           <Row label="You pay" value={`${product.priceUsdc}.00 cUSDC`} sealed />
-          <Row label="Observer success" value={successPct} />
+          <Row label="Observer track record" value={completedLabel} />
           <Row label="Relay" value={shortAddr(observer.address, 6, 4)} mono />
         </div>
         <div className="px-5 py-3 border-t border-white/4">
