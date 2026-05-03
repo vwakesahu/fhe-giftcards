@@ -92,7 +92,13 @@
   --secondary: #111111;
   --secondary-foreground: #e5e5e5;
   --muted: #111111;
-  --muted-foreground: #666666;
+  /* Pre-2026 value was #666666 which, when used with the codebase's common
+     opacity modifiers (/40, /55, /65 etc.), compounded into ~22% gray on
+     near-black: WCAG fail and physically hard to read. Pushing the base to
+     #c8c8c8 keeps the existing hierarchy (lower opacity = more muted) while
+     making every tier above /40 cross AA-large. /20 and below are reserved
+     for decorative uses (giant 404, placeholder dots) and stay invisible. */
+  --muted-foreground: #c8c8c8;
   --accent: #111111;
   --accent-foreground: #e5e5e5;
   --destructive: #ef4444;
