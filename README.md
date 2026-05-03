@@ -6,9 +6,9 @@ Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.stor
 
 **Deployed on Base Sepolia**
 
-- Sigill: [`0x22C5…ba1dC`](https://sepolia.basescan.org/address/0x22C541Bf843113e7C04ab9648eC8735a3feba1dC)
-- cUSDC (ConfidentialERC20): [`0x2C83…F2c2D`](https://sepolia.basescan.org/address/0x2C838637BB71c565EB0ccb0e73569E323E1F2c2D)
-- MockUSDC: [`0xE29D…424F`](https://sepolia.basescan.org/address/0xE29D70400026d77a790a8E483168B94D6E36424F)
+- Sigill: [`0x23A0…0324`](https://sepolia.basescan.org/address/0x23A0EB16E5bb10c46D9653B5D6688cE965e30324)
+- cUSDC (ConfidentialERC20): [`0xaFA9…3A2E`](https://sepolia.basescan.org/address/0xaFA944F1B5f929693f92Ee4445B441FA70953A2E)
+- USDC (Circle): [`0xE29D…424F`](https://sepolia.basescan.org/address/0xE29D70400026d77a790a8E483168B94D6E36424F)
 
 <p>
   Powered by
@@ -48,11 +48,13 @@ Explorer only ever sees opaque handles. IPFS only ever sees gibberish. The amoun
 
 ```
 packages/
-  contracts/   Hardhat + Solidity + Fhenix CoFHE
+  contracts/   Hardhat + Solidity + Fhenix CoFHE (multi-observer Sigill,
+               ConfidentialERC20)
   landing/     Next.js marketing site
-  app/         Next.js dApp (wagmi + RainbowKit + cofhejs)
-  observer/    Node daemon that watches OrderPlaced + UnwrapRequested,
-               decrypts off-chain, buys from Reloadly, fulfils on-chain
+  app/         Next.js dApp (wagmi + RainbowKit + @cofhe/sdk/web)
+  observer/    Node daemon that watches OrderInProccessed / OrderInQueued
+               + UnwrapRequested, decrypts off-chain via @cofhe/sdk/node,
+               buys from Reloadly, fulfils on-chain
 ```
 
 pnpm workspace. Node 20+, pnpm 9+.
@@ -69,47 +71,43 @@ What you'll need to fill in:
 
 | File | Keys | Where to get them |
 |---|---|---|
-| `packages/contracts/.env` | `PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY` | any Base Sepolia wallets funded with test ETH |
+| `packages/contracts/.env` | `PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY_2` | any Base Sepolia wallets funded with test ETH (one deployer + one or two observers) |
 | " | `USDC_ADDRESS` | prefilled, Circle's Base Sepolia USDC. Faucet at [faucet.circle.com](https://faucet.circle.com) |
 | " | `RELOADLY_CLIENT_ID` + `_SECRET` | [reloadly.com](https://reloadly.com), switch to Test mode, Developers section |
 | " | `PINATA_JWT`, `PINATA_GATEWAY` | [pinata.cloud](https://pinata.cloud), API Keys |
 | " | `BASE_SEPOLIA_RPC_URL` | the public endpoint is flaky, prefer Alchemy or Infura or QuickNode |
-| `packages/app/.env.local` | `NEXT_PUBLIC_SIGILL_ADDRESS`, `NEXT_PUBLIC_CUSDC_ADDRESS` | output of `pnpm contracts:deploy` |
+| `packages/app/.env.local` | `NEXT_PUBLIC_SIGILL_ADDRESS`, `NEXT_PUBLIC_CUSDC_ADDRESS`, `NEXT_PUBLIC_USDC_ADDRESS` | populated automatically by `make deploy` (via `scripts/sync-env.mjs` reading `cUSDC.underlying()` as truth for USDC) |
 
-Buyer wallet needs at least 50 USDC (Circle faucet hands out 10 at a time, so run it a few times). Observer wallet needs at least 0.02 ETH, 0.01 for the bond and the rest for gas.
+Buyer wallet needs at least 50 USDC (Circle faucet hands out 10 at a time, so run it a few times). Each observer wallet needs at least 0.02 ETH (0.01 bond + gas). The second observer is optional; leave `OBSERVER_PRIVATE_KEY_2` unset to skip it.
 
 ## Running stuff
 
-Everything runs from the repo root.
+Everything runs from the repo root via `make`. See `make help` for the full list.
 
 ```bash
-# Marketing site
-pnpm landing:dev            # http://localhost:3000
+# One-shot: install deps, deploy contracts, register both observers, then
+# launch dApp + 2 observers in parallel (Ctrl-C stops everything).
+make all
 
-# dApp
-pnpm app:dev                # http://localhost:3000
-
-# Contracts (all commands run against Base Sepolia, no local testing)
-pnpm contracts:compile      # compile Solidity
-pnpm contracts:deploy       # deploy ConfidentialERC20 (cUSDC) + Sigill
-pnpm contracts:register     # register the observer wallet with a 0.01 ETH bond
-pnpm contracts:e2e          # full flow: deploy, register, order, fulfil, unwrap
+# Or piecemeal:
+make setup        # install + deploy + register
+make run          # dApp on :3000 plus observer #1 + #2 in parallel
+make run-app      # just the dApp
+make run-obs1     # just observer #1
+make run-obs2     # just observer #2 (uses OBSERVER_PRIVATE_KEY_2)
+make register     # idempotent: bond observers that aren't bonded yet
+make deploy       # fresh deploy + sync addresses into per-package .env.local
 ```
 
-### End-to-end demo
+`make deploy` runs `hardhat deploy-sigill` (deploys `ConfidentialERC20` + `Sigill`) then `scripts/sync-env.mjs`, which writes the new addresses into `packages/{app,observer}/.env.local`. `cUSDC.underlying()` is queried directly to pick the right USDC address rather than trusting the deployments JSON, which can drift if you deployed against a different USDC than the one currently wrapped.
 
-`pnpm contracts:e2e` drives the whole flow in one script against Base Sepolia:
+`make register` runs `packages/contracts/scripts/register-observers.mjs`, which reads both observer private keys from `packages/contracts/.env` and bonds whichever aren't already at ≥ 0.01 ETH. Safe to re-run.
 
-1. Reads `USDC_ADDRESS` from env, checks the buyer holds at least 50 USDC.
-2. Deploys a fresh `ConfidentialERC20` and `Sigill`.
-3. Registers the observer with a 0.01 ETH bond.
-4. Wraps 50 USDC into cUSDC, approves Sigill for an encrypted 10 USDC allowance.
-5. `placeOrder(encProductId=1, observer)`, which escrows the cUSDC.
-6. Observer decrypts the order, buys from the Reloadly sandbox, hybrid-encrypts the code (AES + IPFS + FHE key), fulfils.
-7. Buyer decrypts the AES key via FHE, pulls the ciphertext from IPFS, recovers the code.
-8. Observer calls `requestUnwrap` then `claimUnwrap` to pull plaintext USDC out of cUSDC.
+If you only want the marketing site:
 
-Each run takes about 2-3 minutes depending on how busy the CoFHE network is.
+```bash
+pnpm landing:dev
+```
 
 ## What actually stays private
 
@@ -142,7 +140,7 @@ Two contracts do the work.
 - `transfer` / `approve` / `transferFrom` operate on encrypted amounts. Insufficient funds silently clamp to 0 rather than revert, which is the standard ERC-7984 semantic and preserves privacy (reverts leak information).
 - `transferFromAllowance(from, to)` is the primitive Sigill uses. It pulls the entire encrypted allowance without needing a fresh `InEuint64` passed through an intermediary, which avoids the zkv signature-binding mismatch that happens under nested `msg.sender`. The allowance zeroes on use, so escrow is replay-safe.
 
-**[Sigill.sol](packages/contracts/contracts/Sigill.sol)** is the checkout.
+**[Sigill.sol](packages/contracts/contracts/Sigill.sol)** is the checkout. Most of the logic lives in [Observer.sol](packages/contracts/contracts/Observer.sol), the abstract base it inherits from — observer registry, per-observer slot capacity, the order queue.
 
 ```solidity
 struct Order {
@@ -153,38 +151,43 @@ struct Order {
   euint128 encAesKey;     // AES-128 key for the code, buyer decrypts
   string ipfsCid;         // pointer to AES-encrypted code
   uint256 deadline;
-  Status status;          // Pending | Fulfilled | Refunded | Rejected
+  Status status;          // Pending | Processing | Fulfilled | Refunded | Rejected | Queued
 }
 ```
 
-Three settlement paths. `fulfillOrder` means the observer delivered, escrow goes to observer. `rejectOrder` is the honest-decline path, escrow returns to the buyer and the bond stays intact. `refund` is what the buyer calls after the 10-minute deadline passes, which also slashes 50% of the observer's bond.
+`placeOrder` emits **`OrderInProccessed`** when the picked observer had a free slot (status `Pending`) or **`OrderInQueued`** when waitlisted behind an earlier order on the same observer (status `Queued`). Once the head order clears, the next queued one auto-promotes to `Pending` with a fresh deadline.
+
+Three settlement paths. `fulfillOrder` means the observer delivered, escrow goes to observer (status `Fulfilled`). `rejectOrder` is the honest-decline path, escrow returns to the buyer and the bond stays intact (status `Rejected`). `refund` is what the buyer calls after the 10-minute deadline passes; it works on both `Pending` and `Queued` orders and slashes 50% of the observer's bond (status `Refunded`).
 
 Access control uses `FHE.allow(handle, address)` per value. The observer gets ACL on `encProductId` and `encPaid`. The buyer gets ACL on `encAesKey`. That's it.
 
 ## The observer
 
-The observer is the off-chain execution layer. It watches the chain, unseals what it's been granted ACL on, and settles gift-card orders. It also acts as the trusted unwrapper for cUSDC (recipient can self-claim too; the observer is a fallback).
+The observer is the off-chain execution layer. It watches the chain, decrypts what it's been granted ACL on via `@cofhe/sdk/node`, and settles gift-card orders. It also acts as the trusted unwrapper for cUSDC (the recipient can self-claim too; the observer is a fallback).
 
 It's a stateless Node process. Each poll iteration it re-checks on-chain status, so dedupe across restarts is free and there is no database.
+
+Sigill supports multiple observers in parallel. Each has a configurable slot count (capacity for active orders); buyers pick which observer fulfils their order at `placeOrder`. If the picked observer is at capacity, the order is `Queued` and starts the moment the head order clears. The `make all` target runs two observers side-by-side using `OBSERVER_PRIVATE_KEY` and `OBSERVER_PRIVATE_KEY_2`.
 
 **What the daemon does each loop**
 
 1. `provider.getBlockNumber()` to find head.
-2. `sigill.queryFilter(OrderPlaced, fromBlock, latest)` filtered by the observer's own address.
-3. `cUSDC.queryFilter(UnwrapRequested, fromBlock, latest)` if this wallet is the registered unwrapper.
-4. For each pending order: unseal `encProductId` + `encPaid`, validate `paid ≥ unitPrice` (otherwise `rejectOrder`), buy the card from Reloadly, AES-128-GCM the code, pin the ciphertext to IPFS, FHE-encrypt the AES key, call `fulfillOrder(id, encAesKey, cid)`.
-5. For each pending unwrap: unseal the debit handle, call `claimUnwrap(id, plain)`.
+2. `sigill.queryFilter(OrderInProccessed, …)` and `sigill.queryFilter(OrderInQueued, …)` in parallel, both filtered by this observer's address.
+3. `cUSDC.queryFilter(UnwrapRequested, …)` if this wallet is the registered unwrapper.
+4. For each `Pending` order: decrypt `encProductId` + `encPaid` via `client.decryptForView(...).withPermit()`, validate `paid ≥ unitPrice` (otherwise `rejectOrder`), buy the card from Reloadly, AES-128-GCM the code, pin the ciphertext to IPFS, FHE-encrypt the AES key, call `fulfillOrder(id, encAesKey, cid)`. `Queued` orders are skipped on this iteration; they'll show up as `Pending` once the head clears.
+5. For each pending unwrap: decrypt the debit handle, call `claimUnwrap(id, plain)`.
 
 **Run it**
 
 ```bash
-cd packages/observer
-cp .env.example .env.local
-# fill in OBSERVER_PRIVATE_KEY, SIGILL_ADDRESS, CUSDC_ADDRESS,
-# BASE_SEPOLIA_RPC_URL, RELOADLY_CLIENT_ID/_SECRET, PINATA_JWT
-pnpm install
-pnpm start          # daemon
-pnpm unwrap         # cash out: unwrap entire sealed balance
+# from repo root, after make setup
+make run-obs1                  # daemon, uses OBSERVER_PRIVATE_KEY
+make run-obs2                  # daemon, uses OBSERVER_PRIVATE_KEY_2
+# or both in parallel along with the dApp:
+make run
+
+# manual cash-out (unwrap entire sealed cUSDC balance):
+pnpm --filter @sigill/observer run unwrap
 ```
 
 Reloadly and Pinata creds are both mandatory. The daemon refuses to start without them.
@@ -200,5 +203,5 @@ Reloadly and Pinata creds are both mandatory. The daemon refuses to start withou
 - **Gift cards**: [Reloadly](https://reloadly.com) sandbox
 - **Storage**: IPFS via [Pinata](https://pinata.cloud)
 - **Network**: Base Sepolia
-- **Frontend**: Next.js, Tailwind v4, shadcn, wagmi + RainbowKit, cofhejs
-- **Observer**: Node (tsx), ethers v6, cofhejs/node
+- **Frontend**: Next.js, Tailwind v4, shadcn, wagmi + RainbowKit, @cofhe/sdk/web
+- **Observer**: Node (tsx), ethers v6, @cofhe/sdk/node
