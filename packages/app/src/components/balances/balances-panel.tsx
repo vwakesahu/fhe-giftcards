@@ -20,10 +20,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 
+import { Encryptable, FheTypes, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
+
 import { addresses, cUSDCAbi, usdcAbi } from "@/lib/contracts";
 import { CUsdcIcon, UsdcIcon } from "@/components/icons";
 import { Spinner } from "@/components/spinner";
-import { ensureCofheInit, getCofhejs } from "@/lib/cofhe";
+import { ensureCofheConnected } from "@/lib/cofhe";
 import { formatUsdc } from "@/lib/format";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -122,14 +124,21 @@ export function BalancesPanel() {
     try {
       setRevealing(true);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await ensureCofheInit(publicClient as any, walletClient);
-      const { cofhejs, FheTypes } = await getCofhejs();
+      const client = await ensureCofheConnected(publicClient as any, walletClient);
       let value: bigint | null = null;
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(handle, FheTypes.Uint64);
-        if (res.data !== undefined && res.data !== null) {
-          value = res.data as bigint;
-          break;
+        try {
+          const result = await client
+            .decryptForView(handle, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            value = result as bigint;
+            break;
+          }
+        } catch {
+          // CoFHE returns 404 / "not yet decrypted" while the threshold network
+          // is still processing — swallow and retry.
         }
         await new Promise((r) => setTimeout(r, 2500));
       }
@@ -229,12 +238,11 @@ export function BalancesPanel() {
       setUnwrapping(true);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await ensureCofheInit(publicClient as any, walletClient);
-      const { cofhejs, Encryptable, FheTypes } = await getCofhejs();
+      const client = await ensureCofheConnected(publicClient as any, walletClient);
 
       // 0) Always unwrap the whole sealed balance. Fetch the latest handle
-      //    (defeat replica lag), unseal to get the plaintext balance, then
-      //    encrypt that exact value. Skips the "how much?" input entirely
+      //    (defeat replica lag), decrypt to get the plaintext balance, then
+      //    re-encrypt that exact value. Skips the "how much?" input entirely
       //    and avoids the `_clampToBalance` silent-zero trap from
       //    over-requesting.
       toast.message("Reading sealed balance");
@@ -253,10 +261,17 @@ export function BalancesPanel() {
       }
       let sealedBalance: bigint | null = null;
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(latestHandle, FheTypes.Uint64);
-        if (res.data !== undefined && res.data !== null) {
-          sealedBalance = res.data as bigint;
-          break;
+        try {
+          const result = await client
+            .decryptForView(latestHandle, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            sealedBalance = result as bigint;
+            break;
+          }
+        } catch {
+          // still processing — retry
         }
         await new Promise((r) => setTimeout(r, 2500));
       }
@@ -265,15 +280,10 @@ export function BalancesPanel() {
 
       // 1) Encrypt the full sealed balance for requestUnwrap.
       toast.message(`Encrypting ${formatUsdc(sealedBalance, 2)} cUSDC`);
-      const encRes = await cofhejs.encrypt([
-        Encryptable.uint64(sealedBalance),
-      ] as const);
-      if (encRes.error || !encRes.data) throw new Error(String(encRes.error));
-      const [encRaw] = encRes.data;
-      const encAmount = {
-        ...encRaw,
-        signature: encRaw.signature as `0x${string}`,
-      };
+      const [encAmount] = await client
+        .encryptInputs([Encryptable.uint64(sealedBalance)])
+        .execute();
+      assertCorrectEncryptedItemInput(encAmount);
 
       // 2) Submit requestUnwrap; capture the debit handle from the event so
       //    we don't have to re-read pendingUnwraps (replica lag hits hard
@@ -313,19 +323,26 @@ export function BalancesPanel() {
       const unwrapId = args.unwrapId as bigint;
       const debitHandle = args.encAmountHandle as bigint;
 
-      // 3) Unseal the debit handle off-chain (buyer has ACL per contract).
-      toast.message("Unsealing debit");
+      // 3) Decrypt the debit handle off-chain (buyer has ACL per contract).
+      toast.message("Decrypting debit");
       let plain: bigint | null = null;
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(debitHandle, FheTypes.Uint64);
-        if (res.data !== undefined && res.data !== null) {
-          plain = res.data as bigint;
-          break;
+        try {
+          const result = await client
+            .decryptForView(debitHandle, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            plain = result as bigint;
+            break;
+          }
+        } catch {
+          // still processing — retry
         }
         await new Promise((r) => setTimeout(r, 2500));
       }
       if (plain === null)
-        throw new Error("cofhejs.unseal pending — retry in a moment");
+        throw new Error("Decryption pending — retry in a moment");
 
       // 4) Finalise. Either this wallet (recipient) or the observer may
       //    call claimUnwrap; the observer daemon races us and whoever gets
@@ -333,7 +350,7 @@ export function BalancesPanel() {
       //
       //    Short delay + forced account sync so MetaMask catches up on
       //    nonce/gas between the requestUnwrap mine and this send
-      //    (cofhejs's EIP-712 signature in between perturbs its poll).
+      //    (the SDK's EIP-712 permit signature in between perturbs its poll).
       //    Letting the wallet derive both values itself is more robust
       //    than passing an explicit nonce, which forces viem to also
       //    pre-compute gas and trips MetaMask's "gas price too low" gate.
@@ -411,17 +428,23 @@ export function BalancesPanel() {
         await new Promise((r) => setTimeout(r, 1500));
       }
       // 2) Auto-unhide: decrypt the new handle so `****` flips to the real
-      //    number. This will prompt a wallet signature if cofhejs hasn't
-      //    been initialised for this session yet.
+      //    number. This will prompt a wallet signature if the cofhe client
+      //    hasn't issued a self-permit for this session yet.
       if (!latest || latest === 0n || !publicClient || !walletClient) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await ensureCofheInit(publicClient as any, walletClient);
-      const { cofhejs, FheTypes } = await getCofhejs();
+      const client = await ensureCofheConnected(publicClient as any, walletClient);
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(latest, FheTypes.Uint64);
-        if (res.data !== undefined && res.data !== null) {
-          setRevealed({ handle: latest, value: res.data as bigint });
-          return;
+        try {
+          const result = await client
+            .decryptForView(latest, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            setRevealed({ handle: latest, value: result as bigint });
+            return;
+          }
+        } catch {
+          // still processing — retry
         }
         await new Promise((r) => setTimeout(r, 2500));
       }

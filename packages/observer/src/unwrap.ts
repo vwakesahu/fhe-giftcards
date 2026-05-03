@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { cofhejs, Encryptable, FheTypes } from "cofhejs/node";
+import { Encryptable, FheTypes, type CofheClient, type CofheConfig } from "@cofhe/sdk";
 
 import { config } from "./config";
 import { CUsdcAbi } from "./abi";
@@ -14,12 +14,9 @@ import { ensureCofheInit } from "./cofhe";
  *
  * Trusted-unwrapper model: `requestUnwrap` debits the sealed balance and
  * grants the unwrapper decrypt permission on the debit handle. The unwrapper
- * then uses `cofhejs.unseal` off-chain to read the plaintext and submits it
- * via `claimUnwrap(id, plain)` — only `msg.sender == unwrapper` can finalise.
- *
- * This replaces the earlier `FHE.decrypt → getDecryptResultSafe` polling
- * loop. Fhenix sunset the on-chain decrypt trigger on base-sepolia and the
- * replacement SDK method (`client.decryptForTx`) hasn't shipped to npm yet.
+ * then decrypts off-chain via @cofhe/sdk's `decryptForView` and submits the
+ * plaintext via `claimUnwrap(id, plain)` — only `msg.sender == unwrapper`
+ * can finalise.
  */
 
 async function main() {
@@ -55,13 +52,13 @@ async function main() {
     process.exit(1);
   }
 
-  await ensureCofheInit(wallet);
+  const client = await ensureCofheInit(wallet);
 
   if (isClaim) {
     const claimId = argv[1] ? BigInt(argv[1]) : undefined;
     if (claimId === undefined) throw new Error("Usage: pnpm unwrap claim <unwrapId>");
     const usdcBefore = usdc ? await usdc.balanceOf(wallet.address) : 0n;
-    await claimPending(cUSDC, claimId);
+    await claimPending(cUSDC, claimId, client);
     if (usdc) {
       const after = await usdc.balanceOf(wallet.address);
       console.log(`  USDC delta  : +${Number(after - usdcBefore) / 1e6} USDC`);
@@ -80,7 +77,7 @@ async function main() {
       console.log("  nothing to unwrap — sealed balance is empty");
       return;
     }
-    amountRaw = await unseal(handle);
+    amountRaw = await decrypt(client, handle);
     console.log(`  sealed balance : ${Number(amountRaw) / 1e6} USDC\n`);
   } else {
     const human = Number(rawAmount);
@@ -94,9 +91,9 @@ async function main() {
 
   // ── requestUnwrap ──
   console.log("② Encrypting unwrap amount…");
-  const encRes = await cofhejs.encrypt([Encryptable.uint64(amountRaw)] as const);
-  if (encRes.error || !encRes.data) throw new Error(`encrypt failed: ${String(encRes.error)}`);
-  const [encAmount] = encRes.data;
+  const [encAmount] = await client
+    .encryptInputs([Encryptable.uint64(amountRaw)])
+    .execute();
 
   console.log("③ Calling requestUnwrap…");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -123,7 +120,7 @@ async function main() {
   console.log(`  unwrapId: ${unwrapId}\n`);
 
   // ── claim immediately ──
-  await claimWithHandle(cUSDC, unwrapId, handle, wallet.address);
+  await claimWithHandle(cUSDC, unwrapId, handle, wallet.address, client);
 
   if (usdc) {
     // Base Sepolia replicas lag behind the sequencer for a few seconds after
@@ -145,9 +142,10 @@ async function claimWithHandle(
   unwrapId: bigint,
   handle: bigint,
   recipient: string,
+  client: CofheClient<CofheConfig>,
 ) {
-  console.log(`④ Unsealing debit handle for unwrap #${unwrapId}…`);
-  const plain = await unseal(handle);
+  console.log(`④ Decrypting debit handle for unwrap #${unwrapId}…`);
+  const plain = await decrypt(client, handle);
   console.log(`  recipient : ${recipient}`);
   console.log(`  plain     : ${Number(plain) / 1e6} USDC`);
 
@@ -164,7 +162,11 @@ async function claimWithHandle(
  * where we don't have the event in hand). Retries the read a few times to
  * survive Base Sepolia replica lag.
  */
-async function claimPending(cUSDC: ethers.Contract, unwrapId: bigint) {
+async function claimPending(
+  cUSDC: ethers.Contract,
+  unwrapId: bigint,
+  client: CofheClient<CofheConfig>,
+) {
   let recipient = ethers.ZeroAddress;
   let handle = 0n;
   let claimed = false;
@@ -185,7 +187,7 @@ async function claimPending(cUSDC: ethers.Contract, unwrapId: bigint) {
     console.log("  already claimed — nothing to do");
     return;
   }
-  await claimWithHandle(cUSDC, unwrapId, handle, recipient);
+  await claimWithHandle(cUSDC, unwrapId, handle, recipient, client);
 }
 
 /**
@@ -210,13 +212,23 @@ async function waitForBalanceChange(
   return latest;
 }
 
-async function unseal(handle: bigint): Promise<bigint> {
+async function decrypt(
+  client: CofheClient<CofheConfig>,
+  handle: bigint,
+): Promise<bigint> {
   for (let i = 1; i <= 10; i++) {
-    const res = await cofhejs.unseal(handle, FheTypes.Uint64);
-    if (res.data !== undefined && res.data !== null) return res.data as bigint;
+    try {
+      const result = await client
+        .decryptForView(handle, FheTypes.Uint64)
+        .withPermit()
+        .execute();
+      if (result !== undefined && result !== null) return result as bigint;
+    } catch {
+      // CoFHE returns "not yet decrypted" while threshold network is processing
+    }
     if (i < 10) await new Promise((r) => setTimeout(r, 3_000));
   }
-  throw new Error("cofhejs.unseal still pending after 30s — try again in a moment");
+  throw new Error("decryption still pending after 30s — try again in a moment");
 }
 
 main().catch((err) => {

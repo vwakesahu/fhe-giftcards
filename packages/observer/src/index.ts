@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { cofhejs, FheTypes } from "cofhejs/node";
+import { FheTypes, type CofheClient, type CofheConfig } from "@cofhe/sdk";
 
 import { config } from "./config";
 import { CUsdcAbi, SigillAbi } from "./abi";
@@ -25,7 +25,7 @@ async function main() {
 
   // Sanity: are we bonded on this Sigill? If not, fail fast so the operator
   // registers before the loop starts wasting RPC calls.
-  const bond: bigint = await sigill.observerBond(wallet.address);
+  const bond: bigint = await sigill.getObserverBondAmount(wallet.address);
   if (bond < MIN_BOND) {
     console.error(
       `\n  ✗ observer not bonded on this Sigill (bond=${ethers.formatEther(bond)} ETH, need ≥ 0.01)\n` +
@@ -43,10 +43,10 @@ async function main() {
     `  unwrapper: ${isUnwrapper ? "this wallet ✓" : `${unwrapperOnChain} (not us — skipping unwrap watch)`}`,
   );
 
-  // Init cofhejs once — subsequent calls are no-ops for the same wallet.
-  console.log("  cofhejs  : initialising…");
-  await ensureCofheInit(wallet);
-  console.log("  cofhejs  : ready\n");
+  // Init cofhe client once — subsequent calls are no-ops for the same wallet.
+  console.log("  cofhe    : initialising…");
+  const client = await ensureCofheInit(wallet);
+  console.log("  cofhe    : ready\n");
 
   // Start at the current head — only new orders placed after boot are picked
   // up. Orders placed during downtime stay Pending until their deadline and
@@ -91,7 +91,7 @@ async function main() {
           inflight.add(key);
 
           try {
-            await processEvent(args.orderId, sigill);
+            await processEvent(args.orderId, sigill, client);
           } catch (err) {
             console.error(`[order #${args.orderId}] failed:`, err instanceof Error ? err.message : err);
             inflight.delete(key);
@@ -114,7 +114,7 @@ async function main() {
             inflight.add(key);
 
             try {
-              await processUnwrap(args.unwrapId, BigInt(args.encAmountHandle), args.from, cUSDC);
+              await processUnwrap(args.unwrapId, BigInt(args.encAmountHandle), args.from, cUSDC, client);
             } catch (err) {
               console.error(`[unwrap #${args.unwrapId}] failed:`, err instanceof Error ? err.message : err);
               inflight.delete(key);
@@ -134,7 +134,11 @@ async function main() {
   console.log("[observer] stopped");
 }
 
-async function processEvent(orderId: bigint, sigill: ethers.Contract) {
+async function processEvent(
+  orderId: bigint,
+  sigill: ethers.Contract,
+  client: CofheClient<CofheConfig>,
+) {
   const order = await sigill.getOrder(orderId);
   const status = Number(order.status);
   if (status !== STATUS_PENDING) return; // already handled (fulfilled / rejected / refunded)
@@ -149,6 +153,7 @@ async function processEvent(orderId: bigint, sigill: ethers.Contract) {
       status,
     },
     sigill,
+    client,
   );
   if (result === null) {
     // FHE network hasn't produced plaintexts yet. Drop from inflight so the
@@ -162,20 +167,28 @@ async function processUnwrap(
   handle: bigint,
   recipient: string,
   cUSDC: ethers.Contract,
+  client: CofheClient<CofheConfig>,
 ) {
   const prefix = `[unwrap #${unwrapId}]`;
-  console.log(`${prefix} requested by ${recipient} — unsealing handle…`);
+  console.log(`${prefix} requested by ${recipient} — decrypting handle…`);
 
   let plain: bigint | null = null;
   for (let i = 1; i <= 10; i++) {
-    const res = await cofhejs.unseal(handle, FheTypes.Uint64);
-    if (res.data !== undefined && res.data !== null) {
-      plain = res.data as bigint;
-      break;
+    try {
+      const result = await client
+        .decryptForView(handle, FheTypes.Uint64)
+        .withPermit()
+        .execute();
+      if (result !== undefined && result !== null) {
+        plain = result as bigint;
+        break;
+      }
+    } catch {
+      // CoFHE returns "not yet decrypted" while threshold network is processing
     }
     if (i < 10) await new Promise((r) => setTimeout(r, 3_000));
   }
-  if (plain === null) throw new Error("cofhejs.unseal pending — retry next loop");
+  if (plain === null) throw new Error("decryption pending — retry next loop");
 
   console.log(`${prefix} plain = ${Number(plain) / 1e6} USDC, submitting claim…`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

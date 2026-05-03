@@ -1,101 +1,52 @@
 "use client";
 
 /**
- * cofhejs helper — the real SDK is big (FHE keys + WASM) so we import it
- * lazily on first use. Pages that never touch FHE stay lean.
+ * @cofhe/sdk helper. The SDK defers the TFHE WASM load to the first
+ * `encryptInputs(...)` call, so importing this module at the page entry is
+ * cheap. We keep a singleton client so connect/permit setup happens once per
+ * wallet address.
  */
-import type {
-  AbstractProvider,
-  AbstractSigner,
-} from "cofhejs/web";
+import { createCofheConfig, createCofheClient } from "@cofhe/sdk/web";
+import { chains } from "@cofhe/sdk/chains";
+import type { CofheClient, CofheConfig } from "@cofhe/sdk";
 import type { PublicClient, WalletClient } from "viem";
 
-type CofhejsNs = typeof import("cofhejs/web");
+let client: CofheClient<CofheConfig> | null = null;
+let connectedFor: string | null = null;
+let permitFor: string | null = null;
 
-let lazy: Promise<CofhejsNs> | null = null;
-function loadCofhejs(): Promise<CofhejsNs> {
-  if (!lazy) lazy = import("cofhejs/web");
-  return lazy;
+export function getCofheClient(): CofheClient<CofheConfig> {
+  if (!client) {
+    const config = createCofheConfig({
+      supportedChains: [chains.baseSepolia],
+    });
+    client = createCofheClient(config);
+  }
+  return client;
 }
 
-function wrap(publicClient: PublicClient, walletClient: WalletClient): {
-  provider: AbstractProvider;
-  signer: AbstractSigner;
-} {
-  const provider: AbstractProvider = {
-    call: async ({ to, data }) => {
-      const result = await publicClient.call({
-        to: to as `0x${string}`,
-        data: data as `0x${string}`,
-      });
-      return result.data ?? "0x";
-    },
-    getChainId: async () => String(await publicClient.getChainId()),
-    send: async (method: string, params?: unknown[]) =>
-      publicClient.request({
-        method: method as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-        params: params as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-      }) as unknown as Promise<unknown>,
-  };
-
-  const signer: AbstractSigner = {
-    signTypedData: async (domain, types, value) =>
-      walletClient.signTypedData({
-        account: walletClient.account!,
-        domain: domain as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-        types: types as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-        primaryType: Object.keys(types)[0] ?? "",
-        message: value as Record<string, unknown>,
-      }),
-    getAddress: async () => walletClient.account!.address,
-    provider,
-    sendTransaction: async (tx) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const loose = tx as any;
-      const hash = await walletClient.sendTransaction({
-        account: walletClient.account!,
-        to: loose.to as `0x${string}`,
-        data: loose.data as `0x${string}` | undefined,
-        value: loose.value ? BigInt(String(loose.value)) : undefined,
-        chain: null,
-      });
-      return hash;
-    },
-  };
-
-  return { provider, signer };
-}
-
-let initializedFor: string | null = null;
-
-/** Initialise cofhejs for this wallet (no-op if already done for this address). */
-export async function ensureCofheInit(
+/**
+ * Connects the singleton client to the wallet and ensures a self-permit
+ * exists for this (chainId, account). Idempotent per address — repeated
+ * calls for the same wallet are no-ops.
+ */
+export async function ensureCofheConnected(
   publicClient: PublicClient,
   walletClient: WalletClient,
-) {
+): Promise<CofheClient<CofheConfig>> {
   const address = walletClient.account?.address;
   if (!address) throw new Error("wallet not connected");
-  if (initializedFor === address) return;
 
-  const { cofhejs } = await loadCofhejs();
-  const { provider, signer } = wrap(publicClient, walletClient);
-  const result = await cofhejs.initialize({
-    provider,
-    signer,
-    environment: "TESTNET",
-  });
-  if (result.error) {
-    // cofhejs swallows the real cause behind a generic "An internal error
-    // occurred" — drill into `cause` so the toast shows something useful.
-    const err = result.error as { code?: string; message?: string; cause?: unknown };
-    const inner = err.cause instanceof Error ? ` — ${err.cause.message}` : "";
-    console.error("[cofhejs init error]", err);
-    throw new Error(`cofhejs init failed [${err.code ?? "?"}]: ${err.message ?? "unknown"}${inner}`);
+  const c = getCofheClient();
+  if (connectedFor !== address) {
+    await c.connect(publicClient, walletClient);
+    connectedFor = address;
   }
-  initializedFor = address;
-}
-
-/** Expose the lazy namespace so callers can cofhejs.encrypt/unseal/etc. */
-export async function getCofhejs(): Promise<CofhejsNs> {
-  return loadCofhejs();
+  if (permitFor !== address) {
+    // decryptForView().withPermit() needs an active self-permit; this prompts
+    // a wallet signature on first call and is cached for future calls.
+    await c.permits.getOrCreateSelfPermit();
+    permitFor = address;
+  }
+  return c;
 }

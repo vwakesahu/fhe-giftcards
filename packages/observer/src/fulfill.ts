@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { cofhejs, Encryptable, FheTypes } from "cofhejs/node";
+import { Encryptable, FheTypes, type CofheClient, type CofheConfig } from "@cofhe/sdk";
 
 import { PRODUCT_MAP, purchaseGiftCard } from "./giftcard";
 import { aesEncrypt, aesKeyToBigInt, generateAesKey } from "./crypto";
@@ -13,10 +13,21 @@ const FHE_DELAY_MS = 3_000;
 // ethers skips estimateGas entirely.
 const FHE_GAS_LIMIT = 800_000n;
 
-async function tryUnseal(handle: bigint, type: FheTypes): Promise<bigint | null> {
+async function tryDecrypt(
+  client: CofheClient<CofheConfig>,
+  handle: bigint,
+  type: FheTypes,
+): Promise<bigint | null> {
   for (let i = 1; i <= FHE_RETRY; i++) {
-    const res = await cofhejs.unseal(handle, type);
-    if (res.data !== undefined && res.data !== null) return res.data as bigint;
+    try {
+      const result = await client
+        .decryptForView(handle, type)
+        .withPermit()
+        .execute();
+      if (result !== undefined && result !== null) return result as bigint;
+    } catch {
+      // CoFHE returns "not yet decrypted" while threshold network is processing
+    }
     if (i < FHE_RETRY) await new Promise((r) => setTimeout(r, FHE_DELAY_MS));
   }
   return null;
@@ -36,11 +47,12 @@ export async function fulfillOne(
   orderId: bigint,
   order: OrderView,
   sigill: Sigill,
+  client: CofheClient<CofheConfig>,
 ): Promise<true | false | null> {
   const prefix = `[order #${orderId}]`;
 
-  const pid = await tryUnseal(order.encProductId, FheTypes.Uint64);
-  const paid = await tryUnseal(order.encPaid, FheTypes.Uint64);
+  const pid = await tryDecrypt(client, order.encProductId, FheTypes.Uint64);
+  const paid = await tryDecrypt(client, order.encPaid, FheTypes.Uint64);
   if (pid === null || paid === null) {
     console.log(`${prefix} FHE decrypt pending — will retry next loop`);
     return null;
@@ -69,11 +81,9 @@ export async function fulfillOne(
   const payload = aesEncrypt(code, aesKey);
   const cid = await uploadToIpfs(payload, orderId);
 
-  const encRes = await cofhejs.encrypt([Encryptable.uint128(aesKeyToBigInt(aesKey))] as const);
-  if (encRes.error || !encRes.data) {
-    throw new Error(`cofhejs.encrypt failed: ${String(encRes.error)}`);
-  }
-  const [encAesKey] = encRes.data;
+  const [encAesKey] = await client
+    .encryptInputs([Encryptable.uint128(aesKeyToBigInt(aesKey))])
+    .execute();
 
   const tx = await sigill.fulfillOrder(orderId, encAesKey, cid, { gasLimit: FHE_GAS_LIMIT });
   const receipt = await tx.wait();

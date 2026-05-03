@@ -11,11 +11,13 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import {
   addresses,
   cUSDCAbi,
-  OBSERVERS,
   sigillAbi,
   type Product,
 } from "@/lib/contracts";
-import { ensureCofheInit, getCofhejs } from "@/lib/cofhe";
+import { Encryptable, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
+
+import { useObservers } from "@/hooks/use-observers";
+import { ensureCofheConnected } from "@/lib/cofhe";
 import { EASE_OUT, stepVariants } from "@/lib/motion";
 import { ProductStep } from "./step-product";
 import { ObserverStep } from "./step-observer";
@@ -41,7 +43,8 @@ export function BuyWizard() {
   const [observerId, setObserverId] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
 
-  const selectedObserver = OBSERVERS.find((o) => o.id === observerId);
+  const { observers } = useObservers();
+  const selectedObserver = observers.find((o) => o.id === observerId) ?? null;
   const priceRaw = useMemo(
     () => (product ? BigInt(product.priceUsdc) * 1_000_000n : 0n),
     [product],
@@ -63,22 +66,25 @@ export function BuyWizard() {
   }
 
   async function handlePlace() {
-    if (!product || !selectedObserver?.address || !publicClient || !walletClient) return;
+    if (!product || !selectedObserver || !publicClient || !walletClient) return;
+    if (selectedObserver.status !== "online") {
+      toast.error("Relay queue just filled up — pick another");
+      return;
+    }
     try {
       setPlacing(true);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await ensureCofheInit(publicClient as any, walletClient);
+      const client = await ensureCofheConnected(publicClient as any, walletClient);
 
       toast.message("Encrypting inputs");
-      const { cofhejs, Encryptable } = await getCofhejs();
-      const encResult = await cofhejs.encrypt([
-        Encryptable.uint64(BigInt(product.id)),
-        Encryptable.uint64(priceRaw),
-      ] as const);
-      if (encResult.error || !encResult.data) throw new Error(String(encResult.error));
-      const [encProductIdRaw, encAmountRaw] = encResult.data;
-      const encProductId = { ...encProductIdRaw, signature: encProductIdRaw.signature as `0x${string}` };
-      const encAmount = { ...encAmountRaw, signature: encAmountRaw.signature as `0x${string}` };
+      const [encProductId, encAmount] = await client
+        .encryptInputs([
+          Encryptable.uint64(BigInt(product.id)),
+          Encryptable.uint64(priceRaw),
+        ])
+        .execute();
+      assertCorrectEncryptedItemInput(encProductId);
+      assertCorrectEncryptedItemInput(encAmount);
 
       toast.message("Approving cUSDC allowance");
       const approveHash = await walletClient.writeContract({
@@ -128,7 +134,12 @@ export function BuyWizard() {
       router.push(`/order/${orderId}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(msg.slice(0, 140));
+      const friendly = /Observers queue is full/i.test(msg)
+        ? "Relay queue is full — pick another relay"
+        : /Observer not bonded/i.test(msg)
+          ? "This relay is no longer bonded — pick another"
+          : msg.slice(0, 140);
+      toast.error(friendly);
       setPlacing(false);
     }
   }

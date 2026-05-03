@@ -9,7 +9,9 @@ import { ArrowLeft, Copy, Check, Lock, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 import { addresses, sigillAbi, ORDER_STATUS } from "@/lib/contracts";
-import { ensureCofheInit, getCofhejs } from "@/lib/cofhe";
+import { FheTypes } from "@cofhe/sdk";
+
+import { ensureCofheConnected } from "@/lib/cofhe";
 import { shortAddr, shortHandle } from "@/lib/format";
 import { EASE_OUT } from "@/lib/motion";
 import { Identicon } from "@/components/identicon";
@@ -172,16 +174,22 @@ function RevealPanel({
     try {
       setOpening(true);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await ensureCofheInit(publicClient as any, walletClient as any);
+      const client = await ensureCofheConnected(publicClient as any, walletClient as any);
 
-      toast.message("Unsealing AES key");
-      const { cofhejs, FheTypes } = await getCofhejs();
+      toast.message("Decrypting AES key");
       let aesKeyValue: bigint | null = null;
       for (let i = 0; i < 10; i++) {
-        const res = await cofhejs.unseal(order.encAesKey, FheTypes.Uint128);
-        if (res.data !== undefined && res.data !== null) {
-          aesKeyValue = res.data as bigint;
-          break;
+        try {
+          const result = await client
+            .decryptForView(order.encAesKey, FheTypes.Uint128)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            aesKeyValue = result as bigint;
+            break;
+          }
+        } catch {
+          // still processing — retry
         }
         await new Promise((r) => setTimeout(r, 3000));
       }
