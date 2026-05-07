@@ -8,10 +8,19 @@ export const PRODUCT_MAP: Record<number, { productId: number; label: string; uni
   3: { productId: 5, label: "Amazon US $25", unitPrice: 25 },
 };
 
+// Reloadly OAuth tokens have a TTL (~24h). Without expiry tracking the daemon
+// caches a token forever and starts 401-ing after the first day of uptime.
+// We track wall-clock expiry from the auth response's `expires_in` and
+// proactively refresh 5 min before; `purchaseGiftCard` also catches 401 and
+// force-refreshes once as a backstop.
 let cachedToken: string | null = null;
+let tokenExpiresAt = 0; // unix ms; 0 ⇒ no token / forced refresh
+const REFRESH_LEAD_MS = 5 * 60 * 1000;
 
-async function getAccessToken(id: string, secret: string): Promise<string> {
-  if (cachedToken) return cachedToken;
+async function getAccessToken(id: string, secret: string, forceRefresh = false): Promise<string> {
+  if (!forceRefresh && cachedToken && Date.now() < tokenExpiresAt - REFRESH_LEAD_MS) {
+    return cachedToken;
+  }
   const res = await fetch(RELOADLY_AUTH_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -23,8 +32,11 @@ async function getAccessToken(id: string, secret: string): Promise<string> {
     }),
   });
   if (!res.ok) throw new Error(`Reloadly auth failed: ${res.status} ${await res.text()}`);
-  const data = (await res.json()) as { access_token: string };
+  const data = (await res.json()) as { access_token: string; expires_in?: number };
   cachedToken = data.access_token;
+  // Default to 1h if Reloadly doesn't echo expires_in (paranoid floor).
+  const ttlSec = typeof data.expires_in === "number" ? data.expires_in : 3600;
+  tokenExpiresAt = Date.now() + ttlSec * 1000;
   return cachedToken;
 }
 
@@ -34,25 +46,35 @@ async function getAccessToken(id: string, secret: string): Promise<string> {
  * the observer must be configured correctly or refuse to fulfil).
  */
 export async function purchaseGiftCard(productId: number, unitPrice: number, orderId: bigint): Promise<string> {
-  const id = process.env.RELOADLY_CLIENT_ID;
-  const secret = process.env.RELOADLY_CLIENT_SECRET;
-  if (!id || !secret) {
+  if (!process.env.RELOADLY_CLIENT_ID || !process.env.RELOADLY_CLIENT_SECRET) {
     throw new Error(
       "RELOADLY_CLIENT_ID and RELOADLY_CLIENT_SECRET are required — set them in .env.local",
     );
   }
+  const id: string = process.env.RELOADLY_CLIENT_ID;
+  const secret: string = process.env.RELOADLY_CLIENT_SECRET;
 
-  const token = await getAccessToken(id, secret);
-  const headers = {
+  const headersFor = (token: string) => ({
     "Content-Type": "application/json",
     Accept: "application/com.reloadly.giftcards-v1+json",
     Authorization: `Bearer ${token}`,
-  };
+  });
+
+  // Tiny helper: fetch, and on 401 refresh the token + retry once. Works for
+  // both the order-place call and the subsequent card-poll calls.
+  async function reloadlyFetch(url: string, init?: RequestInit): Promise<Response> {
+    let token = await getAccessToken(id, secret);
+    let res = await fetch(url, { ...init, headers: { ...headersFor(token), ...(init?.headers ?? {}) } });
+    if (res.status === 401) {
+      token = await getAccessToken(id, secret, true);
+      res = await fetch(url, { ...init, headers: { ...headersFor(token), ...(init?.headers ?? {}) } });
+    }
+    return res;
+  }
 
   console.log(`  [giftcard] ordering product ${productId} ($${unitPrice}) from Reloadly`);
-  const orderRes = await fetch(`${RELOADLY_SANDBOX_URL}/orders`, {
+  const orderRes = await reloadlyFetch(`${RELOADLY_SANDBOX_URL}/orders`, {
     method: "POST",
-    headers,
     body: JSON.stringify({
       productId,
       countryCode: "US",
@@ -68,9 +90,8 @@ export async function purchaseGiftCard(productId: number, unitPrice: number, ord
   console.log(`  [giftcard] Reloadly txn #${orderData.transactionId} (${orderData.status})`);
 
   for (let i = 0; i < 10; i++) {
-    const codeRes = await fetch(
+    const codeRes = await reloadlyFetch(
       `${RELOADLY_SANDBOX_URL}/orders/transactions/${orderData.transactionId}/cards`,
-      { headers },
     );
     if (codeRes.ok) {
       const cards = (await codeRes.json()) as { cardNumber?: string; pinCode?: string }[];
