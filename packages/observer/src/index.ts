@@ -69,9 +69,17 @@ async function main() {
     stopping = true;
   });
 
+  // Lag the queryFilter `toBlock` by a few blocks. Base Sepolia's public RPC
+  // load-balances across replicas: getBlockNumber may hit one replica that's
+  // 1-2 blocks ahead of the one queryFilter lands on, which then rejects with
+  // "block range extends beyond current head block". A small confirmation
+  // depth absorbs the drift; we still see new orders within ~10s of placement.
+  const HEAD_LAG_BLOCKS = 3n;
+
   while (!stopping) {
     try {
-      const latest = BigInt(await provider.getBlockNumber());
+      const head = BigInt(await provider.getBlockNumber());
+      const latest = head > HEAD_LAG_BLOCKS ? head - HEAD_LAG_BLOCKS : head;
       if (latest >= fromBlock) {
         // ── OrderInProccessed / OrderInQueued → fulfil gift-card order ─
         // Sigill emits the former when the relay had a free slot, the
