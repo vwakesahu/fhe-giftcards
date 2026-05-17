@@ -22,14 +22,15 @@ const ORDER_TIMEOUT = 10 * 60;
 const QUOTE_TTL = 5 * 60;
 const WRAP_AMOUNT = 100_000_000n; // 100 cUSDC
 
-// Catalog setup. With OBSERVER_FEE = 0 the total reduces to price * 1.025.
+// Default gift-card amount used across tests. With OBSERVER_FEE = 0 the total
+// reduces to price * 1.0025 (0.25% platform fee).
 const PRODUCT_PRICE = 10_000_000n; // $10 cUSDC base units
 const OBSERVER_FEE = 0n;
-const PLATFORM_FEE_NUM = 25n; // 25 / 1000 = 2.5%
-const PLATFORM_FEE_DENOM = 1000n;
+const PLATFORM_FEE_NUM = 25n; // 25 / 10000 = 0.25%
+const PLATFORM_FEE_DENOM = 10000n;
 const PLATFORM_FEE_AMOUNT =
-  (PRODUCT_PRICE * PLATFORM_FEE_NUM) / PLATFORM_FEE_DENOM; // 250_000
-const TOTAL_AMOUNT = PRODUCT_PRICE + OBSERVER_FEE + PLATFORM_FEE_AMOUNT; // 10_250_000
+  (PRODUCT_PRICE * PLATFORM_FEE_NUM) / PLATFORM_FEE_DENOM; // 25_000
+const TOTAL_AMOUNT = PRODUCT_PRICE + OBSERVER_FEE + PLATFORM_FEE_AMOUNT; // 10_025_000
 const PROTOCOL_VAULT = "0x37DFfFfB73b4A7eE6584F1ea56bac618c29c6882";
 
 async function initCofhe(signer: HardhatEthersSigner) {
@@ -101,9 +102,10 @@ async function quoteAndConfirm(
   observer: HardhatEthersSigner,
   productId: bigint,
   approveAmount: bigint = TOTAL_AMOUNT,
+  amountUsdc: bigint = PRODUCT_PRICE,
 ): Promise<bigint> {
   const quoteReceipt = await (
-    await sigill.connect(buyer).quoteOrder(productId, observer.address)
+    await sigill.connect(buyer).quoteOrder(productId, observer.address, amountUsdc)
   ).wait();
   const quoted = parseLogByName(sigill, quoteReceipt!, "OrderQuoted");
   const pendingId = quoted.args.pendingId as bigint;
@@ -176,12 +178,12 @@ describe("Sigill — quote-then-confirm E2E", () => {
     )) as unknown as Sigill;
     await sigill.waitForDeployment();
 
-    // Seed catalog: products 1..10 all priced at PRODUCT_PRICE.
+    // Activate product IDs 1..10 in the catalog.
     for (let i = 1; i <= 10; i++) {
       await (
         await sigill
           .connect(deployer)
-          .setProductPrice(i, PRODUCT_PRICE)
+          .setProductActive(i, true)
       ).wait();
     }
 
@@ -225,27 +227,24 @@ describe("Sigill — quote-then-confirm E2E", () => {
   // ─── Product catalog ────────────────────────────────────────────────────
 
   describe("product catalog", () => {
-    it("seeds prices via setProductPrice and flips productActive on", async () => {
-      expect(await sigill.productPriceUsdc(1)).to.equal(PRODUCT_PRICE);
+    it("activates products via setProductActive", async () => {
       expect(await sigill.productActive(1)).to.equal(true);
     });
 
-    it("treats a price of 0 as inactive", async () => {
+    it("deactivates a product via setProductActive(false)", async () => {
       await (
-        await sigill.connect(deployer).setProductPrice(1, 0n)
+        await sigill.connect(deployer).setProductActive(1, false)
       ).wait();
-      expect(await sigill.productPriceUsdc(1)).to.equal(0n);
       expect(await sigill.productActive(1)).to.equal(false);
     });
 
-    it("rejects setProductPrice from non-admin", async () => {
+    it("rejects setProductActive from non-admin", async () => {
       await expect(
-        sigill.connect(outsider).setProductPrice(99, 1_000_000n),
+        sigill.connect(outsider).setProductActive(99, true),
       ).to.be.revertedWith("Not admin");
     });
 
-    it("returns 0/false for unset products", async () => {
-      expect(await sigill.productPriceUsdc(999)).to.equal(0n);
+    it("returns false for unset products", async () => {
       expect(await sigill.productActive(999)).to.equal(false);
     });
   });
@@ -311,7 +310,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
     });
 
     it("emits OrderQuoted with the expected total handle the buyer can unseal", async () => {
-      const tx = await sigill.connect(buyer).quoteOrder(1n, observer.address);
+      const tx = await sigill.connect(buyer).quoteOrder(1n, observer.address, PRODUCT_PRICE);
       const receipt = await tx.wait();
       const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
 
@@ -333,7 +332,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
 
     it("stashes a PendingOrder addressable via getPendingOrder", async () => {
       await (
-        await sigill.connect(buyer).quoteOrder(1n, observer.address)
+        await sigill.connect(buyer).quoteOrder(1n, observer.address, PRODUCT_PRICE)
       ).wait();
 
       const p = await sigill.getPendingOrder(0n);
@@ -345,7 +344,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
       );
     });
 
-    it("computes total = price + observerFee + 2.5% platform fee", async () => {
+    it("computes total = price + observerFee + 0.25% platform fee", async () => {
       const customFee = 750_000n;
       await (
         await sigill
@@ -353,25 +352,31 @@ describe("Sigill — quote-then-confirm E2E", () => {
           .registerObserver(customFee, { value: BOND })
       ).wait();
 
-      const tx = await sigill.connect(buyer).quoteOrder(1n, observer2.address);
+      const tx = await sigill.connect(buyer).quoteOrder(1n, observer2.address, PRODUCT_PRICE);
       const receipt = await tx.wait();
       const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
       const handle = ev.args.expectedTotalHandle as bigint;
 
       const expected =
-        PRODUCT_PRICE + customFee + (PRODUCT_PRICE * 25n) / 1000n;
+        PRODUCT_PRICE + customFee + (PRODUCT_PRICE * 25n) / 10000n;
       expect(await unsealUint64(buyer, handle)).to.equal(expected);
     });
 
     it("reverts on an unknown product", async () => {
       await expect(
-        sigill.connect(buyer).quoteOrder(999n, observer.address),
+        sigill.connect(buyer).quoteOrder(999n, observer.address, PRODUCT_PRICE),
       ).to.be.revertedWith("unknown product");
+    });
+
+    it("reverts when amountUsdc is 0", async () => {
+      await expect(
+        sigill.connect(buyer).quoteOrder(1n, observer.address, 0n),
+      ).to.be.revertedWith("Amount must be > 0");
     });
 
     it("reverts when the chosen observer is not bonded", async () => {
       await expect(
-        sigill.connect(buyer).quoteOrder(1n, outsider.address),
+        sigill.connect(buyer).quoteOrder(1n, outsider.address, PRODUCT_PRICE),
       ).to.be.revertedWith("Observer not bonded");
     });
 
@@ -381,7 +386,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
         await quoteAndConfirm(sigill, cUSDC, buyer, observer, BigInt(i + 1));
       }
       await expect(
-        sigill.connect(buyer).quoteOrder(5n, observer.address),
+        sigill.connect(buyer).quoteOrder(5n, observer.address, PRODUCT_PRICE),
       ).to.be.revertedWith("Observers queue is full");
     });
   });
@@ -417,7 +422,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
       expect(await unsealUint64(buyer, BigInt(o.encPaid))).to.equal(
         TOTAL_AMOUNT,
       );
-      // platformFee = 2.5% of price.
+      // platformFee = 0.25% of price.
       await hre.cofhe.mocks.expectPlaintext(
         BigInt(o.platformFee),
         PLATFORM_FEE_AMOUNT,
@@ -453,9 +458,9 @@ describe("Sigill — quote-then-confirm E2E", () => {
       ).wait();
     });
 
-    async function quote(b = buyer, productId = 1n, obs = observer) {
+    async function quote(b = buyer, productId = 1n, obs = observer, amountUsdc = PRODUCT_PRICE) {
       const r = await (
-        await sigill.connect(b).quoteOrder(productId, obs.address)
+        await sigill.connect(b).quoteOrder(productId, obs.address, amountUsdc)
       ).wait();
       const ev = parseLogByName(sigill, r!, "OrderQuoted");
       return ev.args.pendingId as bigint;

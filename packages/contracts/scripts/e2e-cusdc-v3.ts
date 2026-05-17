@@ -3,11 +3,11 @@
  *
  * What changed from v2:
  *   • placeOrder removed — replaced by quoteOrder + confirmOrder two-step.
- *   • Admin seeds the product catalog via setProductPrice before quoting.
+ *   • Admin activates product IDs via setProductActive (no fixed price — buyer supplies amount).
  *   • registerObserver(fees) now takes an explicit flat-fee param (plaintext).
  *   • Quote flow:
- *       1. quoteOrder(productId, observer)  → OrderQuoted event
- *       2. Buyer unseals expectedTotalHandle (price + observerFee + 2.5% platform fee)
+ *       1. quoteOrder(productId, observer, amountUsdc) → OrderQuoted event
+ *       2. Buyer unseals expectedTotalHandle (amount + observerFee + 0.25% platform fee)
  *       3. Buyer approves cUSDC for exactly that plaintext amount (re-encrypted)
  *       4. confirmOrder(pendingId)          → orderId
  *   • fulfillOrder auto-splits: observer gets (paid - platformFee), vault gets platformFee.
@@ -50,9 +50,9 @@ const NETWORK_TO_EXPLORER: Record<string, string> = {
 const PRODUCT_ID = 1n;
 const PRODUCT_PRICE_USDC = 10_000_000n; // 10 USDC
 const OBSERVER_FEE = 0n; // flat fee observer charges on top of product price
-const PLATFORM_FEE_BIPS = 25n; // 25/1000 = 2.5%
-const EXPECTED_PLATFORM_FEE = (PRODUCT_PRICE_USDC * PLATFORM_FEE_BIPS) / 1000n; // 250_000
-const EXPECTED_TOTAL = PRODUCT_PRICE_USDC + OBSERVER_FEE + EXPECTED_PLATFORM_FEE; // 10_250_000
+const PLATFORM_FEE_NUM = 25n; // 25/10000 = 0.25%
+const EXPECTED_PLATFORM_FEE = (PRODUCT_PRICE_USDC * PLATFORM_FEE_NUM) / 10000n; // 25_000
+const EXPECTED_TOTAL = PRODUCT_PRICE_USDC + OBSERVER_FEE + EXPECTED_PLATFORM_FEE; // 10_025_000
 
 let client: CofheClient;
 
@@ -168,15 +168,15 @@ async function main() {
   const sigillAddress = await sigill.getAddress();
   console.log(`  Sigill: ${sigillAddress}\n`);
 
-  // ── 3. Admin seeds product catalog ───────────────────
-  //      Buyer is the deployer (admin). setProductPrice enables quoteOrder.
-  console.log(`③ Admin seeds product catalog (product #${PRODUCT_ID} = $${Number(PRODUCT_PRICE_USDC) / 1e6})...`);
-  const seedTx = await (sigill.connect(buyer) as any).setProductPrice(
+  // ── 3. Admin activates product in catalog ────────────
+  //      Buyer is the deployer (admin). setProductActive enables quoteOrder.
+  console.log(`③ Admin activates product #${PRODUCT_ID} in catalog...`);
+  const seedTx = await (sigill.connect(buyer) as any).setProductActive(
     PRODUCT_ID,
-    PRODUCT_PRICE_USDC,
+    true,
   );
   await seedTx.wait();
-  console.log(`  Set product #${PRODUCT_ID} → ${Number(PRODUCT_PRICE_USDC) / 1e6} USDC`);
+  console.log(`  Product #${PRODUCT_ID} activated`);
   console.log(txLink(seedTx.hash));
   console.log();
 
@@ -203,11 +203,12 @@ async function main() {
 
   // ── 6. Quote order — contract computes encrypted total ─
   //      New two-step: quoteOrder returns a pendingId and emits OrderQuoted
-  //      with the handle for (price + observerFee + 2.5% platformFee).
-  console.log(`⑥ Buyer requests quote for product #${PRODUCT_ID} via observer ${observer.address}...`);
+  //      with the handle for (amount + observerFee + 0.25% platformFee).
+  console.log(`⑥ Buyer requests quote for product #${PRODUCT_ID} ($${Number(PRODUCT_PRICE_USDC) / 1e6}) via observer ${observer.address}...`);
   const quoteTx = await (sigill.connect(buyer) as any).quoteOrder(
     PRODUCT_ID,
     observer.address,
+    PRODUCT_PRICE_USDC,
   );
   const quoteReceipt = await quoteTx.wait();
   console.log(`  quoteOrder tx: ${quoteTx.hash}`);
@@ -430,7 +431,18 @@ async function main() {
   // ── 13. Buyer decrypts gift-card code ─────────────────
   console.log("⑬ Buyer decrypting gift card code...");
   await connect(buyer);
-  const finalOrder = await sigill.getOrder(orderId);
+
+  // Wait for the RPC replica to reflect fulfillOrder (same lag guard as step ⑨).
+  let finalOrder: any;
+  for (let i = 1; i <= 10; i++) {
+    finalOrder = await sigill.getOrder(orderId);
+    if (finalOrder.encAesKey !== 0n) break;
+    console.log(`  RPC replica catching up... (${i}/10)`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (finalOrder.encAesKey === 0n) {
+    throw new Error("encAesKey still 0 after 20s — fulfillOrder may not have propagated");
+  }
 
   const aesKeyValue = (await tryDecrypt(
     finalOrder.encAesKey,

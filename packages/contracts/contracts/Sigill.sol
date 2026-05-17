@@ -10,14 +10,13 @@ import {Observer} from "./Observer.sol";
 ///         decrypts the product request off-chain, buys the gift card, and
 ///         delivers the code via hybrid encryption (AES-on-IPFS + FHE-wrapped
 ///         AES key). Two-step flow:
-///           1. quoteOrder: buyer picks productId + observer. Contract
-///              computes (price + observerFee + platformFee) in the
-///              encrypted domain, stores it, emits OrderQuoted with the
-///              encrypted total handle.
+///           1. quoteOrder: buyer picks productId + observer + amount.
+///              Contract computes (amount + observerFee + platformFee) in
+///              the encrypted domain, stores it, emits OrderQuoted with
+///              the encrypted total handle.
 ///           2. confirmOrder: buyer has approved cUSDC for exactly that
 ///              total. Contract pulls the allowance, FHE.eq-verifies it
 ///              against the stored total, refunds in-place on mismatch.
-///         Buyer never supplies an amount — tampering is impossible.
 contract Sigill is Observer {
     mapping(address => uint256[]) private myOrder;
 
@@ -28,10 +27,12 @@ contract Sigill is Observer {
         admin = msg.sender;
     }
 
-    /// @notice Step 1: get a quote. Emits OrderQuoted with the encrypted
-    ///         total the buyer must approve on cUSDC before confirming.
-    function quoteOrder(uint256 productId, address observerAddress) external returns (uint256 pendingId) {
-        return _quoteOrder(productId, observerAddress);
+    /// @notice Step 1: get a quote. Buyer specifies the gift-card amount in
+    ///         cUSDC base units (6 decimals). Emits OrderQuoted with the
+    ///         encrypted total (amount + observerFee + platformFee) the buyer
+    ///         must approve on cUSDC before confirming.
+    function quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc) external returns (uint256 pendingId) {
+        return _quoteOrder(productId, observerAddress, amountUsdc);
     }
 
     /// @notice Step 2: confirm after approving cUSDC for the quoted total.
