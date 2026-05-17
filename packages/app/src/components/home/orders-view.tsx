@@ -67,8 +67,8 @@ export function OrdersView() {
             observer: order[1],
             encProductId: order[2],
             encPaid: order[3],
-            deadline: order[6],
-            status: Number(order[7]),
+            deadline: order[7],
+            status: Number(order[8]),
           } satisfies OrderRow;
         }),
       );

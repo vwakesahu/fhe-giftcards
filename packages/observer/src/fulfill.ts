@@ -10,8 +10,13 @@ const FHE_DELAY_MS = 3_000;
 
 // Base Sepolia public RPC returns CALL_EXCEPTION on estimateGas for FHE
 // transactions even when the call would succeed. Hardcode a gas ceiling so
-// ethers skips estimateGas entirely.
-const FHE_GAS_LIMIT = 800_000n;
+// ethers skips estimateGas entirely. The new Sigill's `_fulfillOrder` is
+// significantly heavier than the legacy one (extra FHE sub for the platform
+// fee split, a second transferEncrypted to the protocol vault, and an O(n)
+// shuffle of the completeness rosters) — 800k OOG'd silently with
+// data=null, reason=null. 1.8M is well clear of the worst case observed
+// (~795k) plus headroom for queue growth.
+const FHE_GAS_LIMIT = 1_800_000n;
 
 async function tryDecrypt(
   client: CofheClient<CofheConfig>,

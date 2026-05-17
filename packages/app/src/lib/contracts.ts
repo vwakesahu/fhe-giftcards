@@ -166,16 +166,34 @@ export const cUSDCAbi = [
 
 // ─── Sigill ──────────────────────────────────────────────
 export const sigillAbi = [
+  // Step 1 of the new two-step checkout. Returns `pendingId` and emits
+  // OrderQuoted carrying the encrypted total handle the buyer must approve
+  // before calling confirmOrder. `amountUsdc` is the gift-card price in
+  // cUSDC base units (6 decimals); the contract adds observerFee + 0.25%
+  // platformFee inside the encrypted domain.
   {
-    name: "placeOrder",
+    name: "quoteOrder",
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "encProductId", type: "tuple", components: InEncStruct },
+      { name: "productId", type: "uint256" },
       { name: "observerAddress", type: "address" },
+      { name: "amountUsdc", type: "uint64" },
     ],
+    outputs: [{ name: "pendingId", type: "uint256" }],
+  },
+  // Step 2. Reads the buyer's pre-approved cUSDC allowance, FHE.eq-verifies
+  // it against the stored expectedTotal, refunds in-place on mismatch.
+  {
+    name: "confirmOrder",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "pendingId", type: "uint256" }],
     outputs: [],
   },
+  // 9-tuple now — `platformFee` was inserted at index 4 in the new
+  // contract so the observer's cut (encPaid - platformFee) can be split
+  // off at fulfillment without leaking the breakdown.
   {
     name: "getOrder",
     type: "function",
@@ -186,10 +204,25 @@ export const sigillAbi = [
       { name: "observer", type: "address" },
       { name: "encProductId", type: "uint256" },
       { name: "encPaid", type: "uint256" },
+      { name: "platformFee", type: "uint256" },
       { name: "encAesKey", type: "uint256" },
       { name: "ipfsCid", type: "string" },
       { name: "deadline", type: "uint256" },
       { name: "status", type: "uint8" },
+    ],
+  },
+  {
+    name: "getPendingOrder",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "pendingId", type: "uint256" }],
+    outputs: [
+      { name: "buyer", type: "address" },
+      { name: "observer", type: "address" },
+      { name: "productId", type: "uint256" },
+      { name: "expectedTotal", type: "uint256" },
+      { name: "platformFee", type: "uint256" },
+      { name: "expiresAt", type: "uint256" },
     ],
   },
   {
@@ -223,6 +256,7 @@ export const sigillAbi = [
   // Roster — replaces the static OBSERVERS placeholder list. Returns one
   // ObserverDetails per registered observer. Field names mirror the contract
   // (`sucessRate`, `soltSize` typos kept intentionally so the ABI matches).
+  // `observerFees` is the encrypted euint64 handle for the relay's flat fee.
   {
     name: "getObserverDetail",
     type: "function",
@@ -236,6 +270,7 @@ export const sigillAbi = [
           { name: "sucessRate", type: "uint256" },
           { name: "slotLeft", type: "uint256" },
           { name: "soltSize", type: "uint256" },
+          { name: "observerFees", type: "uint256" },
         ],
       },
     ],
@@ -298,9 +333,23 @@ export const sigillAbi = [
     inputs: [{ name: "orderId", type: "uint256" }],
     outputs: [],
   },
-  // Replaced the legacy `OrderPlaced` event. Sigill now emits one of two
-  // events on `placeOrder` depending on whether the picked observer has slot
-  // capacity:
+  // Emitted by quoteOrder (step 1). `expectedTotalHandle` is the euint64
+  // handle for (amount + observerFee + platformFee) that the buyer must
+  // unseal, then re-encrypt + approve before calling confirmOrder.
+  {
+    type: "event",
+    name: "OrderQuoted",
+    inputs: [
+      { name: "pendingId", type: "uint256", indexed: true },
+      { name: "buyer", type: "address", indexed: true },
+      { name: "observer", type: "address", indexed: true },
+      { name: "productId", type: "uint256" },
+      { name: "expectedTotalHandle", type: "uint256" },
+      { name: "expiresAt", type: "uint256" },
+    ],
+  },
+  // confirmOrder emits one of two events depending on whether the picked
+  // observer has slot capacity at the time of the call:
   //   • OrderInProccessed (sic — typo preserved on-chain) when slotted active
   //   • OrderInQueued                                     when waitlisted
   // Both carry `orderId` as the first indexed arg, which is all the buy

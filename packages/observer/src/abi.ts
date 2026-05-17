@@ -12,7 +12,7 @@ export const SigillAbi = [
     name: "registerObserver",
     type: "function",
     stateMutability: "payable",
-    inputs: [],
+    inputs: [{ name: "fees", type: "uint64" }],
     outputs: [],
   },
   {
@@ -22,6 +22,11 @@ export const SigillAbi = [
     inputs: [{ name: "observer", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
+  // 9-tuple now — `platformFee` was inserted at index 4 in the new contract.
+  // Keeping the 8-tuple ABI here made ethers decode the wrong fields:
+  // `status` was read from a high uint256 (the on-chain deadline), so the
+  // observer's `status !== Pending` short-circuit always fired and the daemon
+  // silently dropped every order.
   {
     name: "getOrder",
     type: "function",
@@ -32,6 +37,7 @@ export const SigillAbi = [
       { name: "observer", type: "address" },
       { name: "encProductId", type: "uint256" },
       { name: "encPaid", type: "uint256" },
+      { name: "platformFee", type: "uint256" },
       { name: "encAesKey", type: "uint256" },
       { name: "ipfsCid", type: "string" },
       { name: "deadline", type: "uint256" },

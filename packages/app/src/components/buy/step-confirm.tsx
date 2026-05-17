@@ -48,7 +48,8 @@ export function ConfirmStep({
         </div>
         <div className="px-5 py-3 border-t border-white/4">
           <p className="text-[11.5px] text-muted-foreground/55 leading-relaxed">
-            Two transactions: approve sealed cUSDC, then <span className="text-foreground/75">placeOrder</span>.
+            Three transactions: <span className="text-foreground/75">quoteOrder</span> for an encrypted total,
+            approve sealed cUSDC, then <span className="text-foreground/75">confirmOrder</span>.
             The observer unseals, fulfils, and drops a code only your wallet can open.
           </p>
         </div>
