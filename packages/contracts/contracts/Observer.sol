@@ -87,7 +87,6 @@ contract Observer {
     address public admin;
     uint256 public nextOrderId;
     uint256 public nextPendingId;
-    euint64 private platform_earning;
 
     address[] public observers;
     mapping(address => bool) private isObserver;
@@ -166,8 +165,6 @@ contract Observer {
         euint64 price = FHE.asEuint64(amountUsdc);
         euint64 observerFee = FHE.asEuint64(observerDetails[observerAddress].observerFees);
         euint64 platformFee = FHE.div(FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))), FHE.asEuint64(uint64(10000)));
-        platform_earning = FHE.add(platformFee, platform_earning);
-        FHE.allowThis(platform_earning);
         euint64 total = FHE.add(FHE.add(price, observerFee), platformFee);
 
         FHE.allowThis(total);
