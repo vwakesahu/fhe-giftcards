@@ -3,79 +3,94 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = [0.165, 0.84, 0.44, 1] as const;
 
-const lifecycle = [
+const steps = [
   {
-    step: "01",
-    title: "Buyer places order",
-    body: "Product ID and ETH amount encrypt in the browser with Fhenix CoFHE. Funds lock on Base.",
+    n: "01",
+    title: "Pick a card",
+    body: "Amazon US, $5 or $10 or $25. The product ID is encrypted in your browser before it ever touches Base.",
   },
   {
-    step: "02",
-    title: "Observer decrypts privately",
-    body: "A bonded observer is granted FHE access — just enough to know what to buy, and for how much.",
+    n: "02",
+    title: "Pay in cUSDC",
+    body: "Approve a sealed cUSDC allowance. Sigill consumes it as encrypted escrow. The amount never lands in plaintext.",
   },
   {
-    step: "03",
-    title: "Gift card delivered sealed",
-    body: "Observer buys the card, AES-encrypts the code, pins it to IPFS, releases the escrow.",
-  },
-  {
-    step: "04",
-    title: "Buyer unseals",
-    body: "Only the buyer can decrypt the AES key via FHE. Chain never sees the code, the product, or the amount.",
+    n: "03",
+    title: "Open the envelope",
+    body: "A bonded observer fulfils the order, pins an AES-encrypted code to IPFS, and wraps the AES key to your wallet. Only you can unseal it.",
   },
 ];
 
 export function ProductDemo() {
-  const ref = useRef(null);
-  const isInView = useInView(ref, { once: true, margin: "-15%" });
+  const ref = useRef<HTMLDivElement | null>(null);
+  const inView = useInView(ref, { once: true, margin: "-20%" });
 
   return (
-    <section id="demo" className="py-40 px-6 sm:px-10">
-      <div className="max-w-[1400px] mx-auto">
+    <section id="how" className="py-28 sm:py-36 px-6 sm:px-10">
+      <div className="max-w-7xl mx-auto" ref={ref}>
         <motion.div
-          ref={ref}
-          initial={{ opacity: 0 }}
-          animate={isInView ? { opacity: 1 } : {}}
-          transition={{ duration: 1, ease }}
-          className="mb-24 flex flex-col sm:flex-row sm:items-end justify-between gap-6"
+          initial={{ opacity: 0, y: 16 }}
+          animate={inView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.8, ease }}
+          className="mb-12 sm:mb-16 max-w-2xl"
         >
-          <h2 className="font-serif text-[clamp(2.5rem,5vw,5rem)] leading-[0.95] tracking-[-0.02em]">
-            Checkout, but
-            <br />
-            <span className="italic text-sp glow-text">sealed</span>
-          </h2>
-          <p className="font-mono text-xs text-muted-foreground max-w-xs leading-relaxed">
-            The buyer picks a product, the chain sees a ciphertext, and a
-            bonded observer delivers the goods without ever touching the
-            clear amount.
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-foreground/35 mb-5">
+            The flow
           </p>
+          <h2 className="text-[clamp(2rem,4vw,3.25rem)] font-medium leading-[1.04] tracking-[-0.03em]">
+            How an order moves
+            <br />
+            <span className="text-foreground/55">through Sigill.</span>
+          </h2>
         </motion.div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-px bg-border">
-          {lifecycle.map((item, i) => (
-            <motion.div
-              key={item.step}
-              initial={{ opacity: 0, y: 30 }}
-              animate={isInView ? { opacity: 1, y: 0 } : {}}
-              transition={{ duration: 0.8, delay: 0.1 + i * 0.1, ease }}
-              className="bg-background p-10 sm:p-12 flex flex-col gap-8 min-h-[360px]"
-            >
-              <p className="font-mono text-[10px] tracking-[0.3em] text-sp/60 uppercase">
-                {item.step}
-              </p>
-              <h3 className="font-serif text-2xl italic leading-tight">
-                {item.title}
-              </h3>
-              <p className="font-mono text-xs text-muted-foreground/70 leading-relaxed mt-auto">
-                {item.body}
-              </p>
-            </motion.div>
+        {/* Vertical TOC. Three columns per row: number, title, body. */}
+        <div>
+          {steps.map((step, i) => (
+            <Row key={step.n} step={step} index={i} inView={inView} />
           ))}
         </div>
       </div>
     </section>
+  );
+}
+
+function Row({
+  step,
+  index,
+  inView,
+}: {
+  step: { n: string; title: string; body: string };
+  index: number;
+  inView: boolean;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={inView ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.7, delay: 0.1 + index * 0.12, ease }}
+      className={`group grid grid-cols-1 md:grid-cols-12 items-start gap-y-3 md:gap-x-10 py-12 sm:py-14 ${
+        index === 0
+          ? "border-y border-foreground/10"
+          : "border-b border-foreground/10"
+      }`}
+    >
+      {/* Three-track magazine TOC. items-start with deliberate
+          cap-height padding on the title and body so all three columns
+          start at the same visual y-line. */}
+      <span className="md:col-span-2 font-mono text-[clamp(2rem,4vw,3rem)] leading-none text-foreground/25 tabular-nums group-hover:text-foreground/45 transition-colors duration-500">
+        {step.n}
+      </span>
+
+      <h3 className="md:col-span-4 text-2xl sm:text-[1.625rem] font-medium tracking-[-0.02em] leading-[1.15] md:pt-[6px]">
+        {step.title}
+      </h3>
+
+      <p className="md:col-span-6 text-[15px] leading-[1.6] text-foreground/60 max-w-[52ch] md:pt-[10px]">
+        {step.body}
+      </p>
+    </motion.div>
   );
 }

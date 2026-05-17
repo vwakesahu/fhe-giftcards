@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Instrument_Serif } from "next/font/google";
+import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
+
+const sans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
 
 const serif = Instrument_Serif({
   variable: "--font-serif",
@@ -15,9 +20,9 @@ const mono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sigill",
+  title: "Sigill. Gift cards, sealed.",
   description:
-    "Private checkout sealed by FHE, amounts stay encrypted end-to-end on Base",
+    "Buy a gift card on Base Sepolia. The chain never sees what you paid, the observer never sees the code. Only your wallet can open the envelope.",
 };
 
 export default function RootLayout({
@@ -27,7 +32,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${serif.variable} ${mono.variable} antialiased`}>
+      <body
+        className={`${sans.variable} ${serif.variable} ${mono.variable} font-sans antialiased`}
+      >
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"

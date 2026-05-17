@@ -1,52 +1,79 @@
 "use client";
 
-import { motion, useScroll, useMotionValueEvent } from "framer-motion";
+import { motion, useMotionValueEvent, useScroll } from "framer-motion";
 import { useState } from "react";
 
+import { APP_URL, BRAND_NAME, CTA_OPEN_APP_SHORT, GITHUB_URL } from "@/lib/constants";
+import { GithubGlyph, SigillWordmark } from "./icons";
+
+const ease = [0.165, 0.84, 0.44, 1] as const;
+
 export function Nav() {
-  const [hidden, setHidden] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const { scrollY } = useScroll();
 
-  useMotionValueEvent(scrollY, "change", (latest) => {
-    setHidden(latest > 50);
+  useMotionValueEvent(scrollY, "change", (y) => {
+    setScrolled(y > 12);
   });
 
   return (
     <motion.header
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 1, delay: 0.1 }}
-      className="fixed top-0 left-0 right-0 z-50"
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, ease }}
+      className="fixed top-0 inset-x-0 z-50"
     >
       <motion.div
-        animate={{ height: hidden ? 0 : "auto", opacity: hidden ? 0 : 1 }}
-        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-        className="bg-sp/5 border-b border-sp/10 overflow-hidden"
+        animate={{
+          backgroundColor: scrolled
+            ? "rgba(13, 12, 10, 1)"
+            : "rgba(13, 12, 10, 0)",
+          borderColor: scrolled
+            ? "rgba(240, 236, 228, 0.06)"
+            : "rgba(240, 236, 228, 0)",
+        }}
+        transition={{ duration: 0.3, ease }}
+        className="border-b"
       >
-        <div className="max-w-[1400px] mx-auto px-6 sm:px-10 py-2 flex items-center justify-center gap-3 font-mono text-[11px] text-sp">
-          <span>Live on Base Sepolia</span>
-          <span className="text-sp/30">&middot;</span>
-          <span className="text-sp/70">Sealed by FHE</span>
+        <div className="max-w-6xl mx-auto px-6 sm:px-8 h-14 flex items-center justify-between">
+          <a
+            href="/"
+            className="inline-flex items-baseline gap-2 text-foreground"
+            aria-label={BRAND_NAME}
+          >
+            <SigillWordmark className="text-[20px]" />
+          </a>
+
+          <div className="flex items-center gap-5 sm:gap-6">
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${BRAND_NAME} on GitHub`}
+              className="inline-flex items-center text-foreground/60 hover:text-foreground transition-colors"
+            >
+              <GithubGlyph />
+            </a>
+            <a
+              href={APP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-center gap-1.5 text-[13px] font-medium text-foreground/80 hover:text-foreground transition-colors"
+            >
+              {CTA_OPEN_APP_SHORT}
+              <motion.span
+                aria-hidden
+                className="inline-block"
+                initial={{ x: 0 }}
+                whileHover={{ x: 2 }}
+                transition={{ duration: 0.2, ease }}
+              >
+                →
+              </motion.span>
+            </a>
+          </div>
         </div>
       </motion.div>
-      <div className="max-w-[1400px] mx-auto px-6 sm:px-10 py-6 flex items-center justify-between mix-blend-difference">
-        <a href="/" className="font-mono text-sm text-white tracking-tight">
-          sigill<span className="text-white/40">_</span>
-        </a>
-        <div className="flex items-center gap-4">
-          {/* <span className="font-mono text-[10px] text-white/40 uppercase tracking-[0.15em]">
-            Base &middot; Fhenix CoFHE
-          </span> */}
-          <a
-            href="https://app.sigill.store"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-[10px] text-white/70 hover:text-white uppercase tracking-[0.15em] border border-white/20 px-3 py-1.5 hover:border-white/60 transition-colors"
-          >
-            app.sigill.store &rarr;
-          </a>
-        </div>
-      </div>
     </motion.header>
   );
 }
