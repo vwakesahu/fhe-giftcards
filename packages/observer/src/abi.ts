@@ -12,7 +12,14 @@ export const SigillAbi = [
     name: "registerObserver",
     type: "function",
     stateMutability: "payable",
-    inputs: [],
+    inputs: [{ name: "fees", type: "uint64" }],
+    outputs: [],
+  },
+  {
+    name: "setObserverFees",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "newFees", type: "uint64" }],
     outputs: [],
   },
   {
