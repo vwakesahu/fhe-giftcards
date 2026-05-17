@@ -30,13 +30,27 @@ if (!sigillAddr) {
 const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
 const provider = new ethers.JsonRpcProvider(rpcUrl);
 
+// Per-slot flat fee in cUSDC base units (6 decimals). OBSERVER_FEES /
+// OBSERVER_FEES_2 override the default of 0 (free). Set to e.g. "500000"
+// for a 0.50 USDC flat fee per fulfilment.
 const slots = [
-  { label: "observer #1", key: process.env.OBSERVER_PRIVATE_KEY },
-  { label: "observer #2", key: process.env.OBSERVER_PRIVATE_KEY_2 },
+  {
+    label: "observer #1",
+    key: process.env.OBSERVER_PRIVATE_KEY,
+    fees: BigInt(process.env.OBSERVER_FEES ?? "0"),
+  },
+  {
+    label: "observer #2",
+    key: process.env.OBSERVER_PRIVATE_KEY_2,
+    fees: BigInt(process.env.OBSERVER_FEES_2 ?? process.env.OBSERVER_FEES ?? "0"),
+  },
 ];
 
+// New contract signature: registerObserver(uint64 fees). The pre-fee
+// version is left in the fallback chain in case this script is ever
+// pointed at an older Sigill — first attempt is the new signature.
 const abi = [
-  "function registerObserver() payable",
+  "function registerObserver(uint64 fees) payable",
   "function getObserverBondAmount(address) view returns (uint256)",
   "function observerBond(address) view returns (uint256)",
 ];
@@ -45,7 +59,7 @@ const MIN = ethers.parseEther("0.01");
 
 console.log(`✓ registering observers on Sigill ${sigillAddr}`);
 
-for (const { label, key } of slots) {
+for (const { label, key, fees } of slots) {
   if (!key) {
     console.log(`  ${label}: no key set — skipping`);
     continue;
@@ -82,7 +96,8 @@ for (const { label, key } of slots) {
     process.exit(1);
   }
 
-  const tx = await sigill.registerObserver({ value: MIN });
+  console.log(`    fee per order: ${Number(fees) / 1e6} USDC`);
+  const tx = await sigill.registerObserver(fees, { value: MIN });
   console.log(`    registering… tx=${tx.hash}`);
   await tx.wait();
   console.log(`    ✓ bonded`);

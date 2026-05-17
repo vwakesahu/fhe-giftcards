@@ -14,7 +14,7 @@ import {
   sigillAbi,
   type Product,
 } from "@/lib/contracts";
-import { Encryptable, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
+import { Encryptable, FheTypes, assertCorrectEncryptedItemInput } from "@cofhe/sdk";
 
 import { useObservers } from "@/hooks/use-observers";
 import { ensureCofheConnected } from "@/lib/cofhe";
@@ -29,7 +29,7 @@ type Step = 0 | 1 | 2;
 const STEPS = [
   { title: "Pick card", desc: "Three Amazon denominations, sealed with FHE." },
   { title: "Pick relay", desc: "Which observer fulfils the order." },
-  { title: "Confirm", desc: "Two tx — approve an encrypted allowance, place order." },
+  { title: "Confirm", desc: "Three tx — quote, approve sealed cUSDC, confirm." },
 ] as const;
 
 export function BuyWizard() {
@@ -77,22 +77,94 @@ export function BuyWizard() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const client = await ensureCofheConnected(publicClient as any, walletClient);
 
-      toast.message("Encrypting inputs");
-      const [encProductId, encAmount] = await client
-        .encryptInputs([
-          Encryptable.uint64(BigInt(product.id)),
-          Encryptable.uint64(priceRaw),
-        ])
-        .execute();
-      assertCorrectEncryptedItemInput(encProductId);
-      assertCorrectEncryptedItemInput(encAmount);
+      // ── 1. Quote ─────────────────────────────────────────
+      //      Contract computes (amount + observerFee + 0.25% platformFee)
+      //      inside the encrypted domain and emits OrderQuoted with the
+      //      handle. amountUsdc is the gift-card price in cUSDC base units.
+      toast.message("Requesting quote");
+      const quoteCall = {
+        address: addresses.sigill,
+        abi: sigillAbi,
+        functionName: "quoteOrder" as const,
+        args: [BigInt(product.id), selectedObserver.address, priceRaw] as const,
+        account: walletClient.account!,
+      };
+      const quoteGas = await simulateAndGetGas(
+        publicClient,
+        quoteCall,
+        GAS_CEILING.sigillQuoteOrder,
+      );
+      const quoteHash = await walletClient.writeContract({
+        ...quoteCall,
+        chain: walletClient.chain,
+        gas: quoteGas,
+      });
+      const quoteReceipt = await publicClient.waitForTransactionReceipt({
+        hash: quoteHash,
+      });
+      if (quoteReceipt.status !== "success") {
+        throw new Error("quoteOrder reverted — product may not be active");
+      }
 
-      toast.message("Approving cUSDC allowance");
+      const quotedLog = quoteReceipt.logs
+        .map((l: (typeof quoteReceipt.logs)[number]) => {
+          try {
+            const decoded = decodeEventLog({ abi: sigillAbi, data: l.data, topics: l.topics });
+            return decoded.eventName === "OrderQuoted" ? decoded : null;
+          } catch {
+            return null;
+          }
+        })
+        .find(Boolean);
+
+      if (!quotedLog || !("pendingId" in quotedLog.args)) {
+        throw new Error("Quote tx mined but no OrderQuoted event found");
+      }
+      const pendingId = quotedLog.args.pendingId as bigint;
+      const expectedTotalHandle = quotedLog.args.expectedTotalHandle as bigint;
+
+      // ── 2. Unseal the quoted total ───────────────────────
+      //      Buyer has ACL on the handle (granted in _quoteOrder). Retry
+      //      the decrypt loop because the FHE network can lag a few seconds
+      //      behind the on-chain block, especially on Base Sepolia.
+      toast.message("Unsealing quoted total");
+      let quotedTotal: bigint | null = null;
+      for (let i = 0; i < 10; i++) {
+        try {
+          const result = await client
+            .decryptForView(expectedTotalHandle, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            quotedTotal = result as bigint;
+            break;
+          }
+        } catch {
+          // still processing — retry
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      if (quotedTotal === null) {
+        throw new Error("Could not unseal quoted total — try again in a moment");
+      }
+
+      // ── 3. Encrypted approve for exactly the quoted total ─
+      //      confirmOrder uses FHE.eq to compare the pulled allowance
+      //      against the stored expectedTotal; any deviance results in a
+      //      silent refund (the order escrow becomes 0 and the observer
+      //      rejects). So we must approve the exact unsealed amount.
+      toast.message("Encrypting allowance");
+      const [encApprove] = await client
+        .encryptInputs([Encryptable.uint64(quotedTotal)])
+        .execute();
+      assertCorrectEncryptedItemInput(encApprove);
+
+      toast.message("Approving sealed cUSDC");
       const approveCall = {
         address: addresses.cUSDC,
         abi: cUSDCAbi,
         functionName: "approve" as const,
-        args: [addresses.sigill, encAmount] as const,
+        args: [addresses.sigill, encApprove] as const,
         account: walletClient.account!,
       };
       const approveGas = await simulateAndGetGas(
@@ -112,34 +184,37 @@ export function BuyWizard() {
         throw new Error("cUSDC approval reverted — try again");
       }
 
-      toast.message("Placing order");
-      const placeCall = {
+      // ── 4. Confirm ───────────────────────────────────────
+      toast.message("Confirming order");
+      const confirmCall = {
         address: addresses.sigill,
         abi: sigillAbi,
-        functionName: "placeOrder" as const,
-        args: [encProductId, selectedObserver.address] as const,
+        functionName: "confirmOrder" as const,
+        args: [pendingId] as const,
         account: walletClient.account!,
       };
-      const placeGas = await simulateAndGetGas(
+      const confirmGas = await simulateAndGetGas(
         publicClient,
-        placeCall,
-        GAS_CEILING.sigillPlaceOrder,
+        confirmCall,
+        GAS_CEILING.sigillConfirmOrder,
       );
-      const placeHash = await walletClient.writeContract({
-        ...placeCall,
+      const confirmHash = await walletClient.writeContract({
+        ...confirmCall,
         chain: walletClient.chain,
-        gas: placeGas,
+        gas: confirmGas,
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: placeHash });
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: confirmHash,
+      });
       if (receipt.status !== "success") {
-        throw new Error("placeOrder reverted — sealed balance may be insufficient");
+        throw new Error("confirmOrder reverted — sealed balance may be insufficient");
       }
 
-      // Sigill emits one of two events on placeOrder: OrderInProccessed (sic
-      // — typo on-chain) when the relay had a free slot, or OrderInQueued
-      // when the buyer is waitlisted. Both carry `orderId` first.
+      // confirmOrder emits one of two events depending on the relay's
+      // slot capacity at confirm time: OrderInProccessed (sic, kept to
+      // match the on-chain typo) or OrderInQueued. Both carry orderId.
       const log = receipt.logs
-        .map((l) => {
+        .map((l: (typeof receipt.logs)[number]) => {
           try {
             const decoded = decodeEventLog({ abi: sigillAbi, data: l.data, topics: l.topics });
             return decoded.eventName === "OrderInProccessed" ||
@@ -153,7 +228,7 @@ export function BuyWizard() {
         .find(Boolean);
 
       const orderId = log?.args && "orderId" in log.args ? (log.args.orderId as bigint) : undefined;
-      if (orderId === undefined) throw new Error("Order placed but no OrderInProccessed/OrderInQueued event found");
+      if (orderId === undefined) throw new Error("Order confirmed but no OrderInProccessed/OrderInQueued event found");
 
       const queued = log?.eventName === "OrderInQueued";
       toast.success(queued ? `Order #${String(orderId)} queued` : `Order #${String(orderId)} sealed`);
@@ -164,7 +239,11 @@ export function BuyWizard() {
         ? "Relay queue is full — pick another relay"
         : /Observer not bonded/i.test(msg)
           ? "This relay is no longer bonded — pick another"
-          : msg.slice(0, 140);
+          : /unknown product/i.test(msg)
+            ? "Product isn't active in the catalogue yet — admin must enable it"
+            : /Quote expired/i.test(msg)
+              ? "Quote expired before confirm — start over"
+              : msg.slice(0, 140);
       toast.error(friendly);
       setPlacing(false);
     }
@@ -326,7 +405,7 @@ function Footer({
         disabled={!canAdvance}
         whileTap={canAdvance ? { scale: 0.97 } : {}}
         transition={{ duration: 0.12 }}
-        className="h-9 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-2"
+        className="h-9 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-2"
       >
         Continue
         <ArrowRight className="size-3.5" />

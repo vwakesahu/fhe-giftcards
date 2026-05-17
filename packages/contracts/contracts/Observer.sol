@@ -60,7 +60,7 @@ contract Observer {
         uint256 sucessRate;
         uint256 slotLeft;
         uint256 soltSize;
-        uint64 observerFees;
+        euint64 observerFees;
     }
 
     // Stash of contract-computed totals between quoteOrder and confirmOrder.
@@ -113,7 +113,10 @@ contract Observer {
         observerBondAmount[msg.sender] += msg.value;
         observers.push(msg.sender);
         isObserver[msg.sender] = true;
-        observerDetails[msg.sender] = ObserverDetails(msg.sender, 0, 4, 4, fees);
+        euint64 encFees = FHE.asEuint64(fees);
+        FHE.allowThis(encFees);
+        FHE.allow(encFees, msg.sender);
+        observerDetails[msg.sender] = ObserverDetails(msg.sender, 0, 4, 4, encFees);
         emit ObserverRegistered(msg.sender, observerBondAmount[msg.sender]);
     }
 
@@ -153,18 +156,18 @@ contract Observer {
     /// @notice Step 1 — compute the encrypted total (price + observerFee +
     ///         platformFee) and stash it. Emits OrderQuoted with the handle
     ///         so the buyer's frontend can unseal it and prepare the approve.
-    function _quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc)
-        internal
-        returns (uint256 pendingId)
-    {
+    function _quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc) internal returns (uint256 pendingId) {
         require(productActive[productId], "unknown product");
         require(amountUsdc > 0, "Amount must be > 0");
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
         require(observerDetails[observerAddress].slotLeft > 0, "Observers queue is full");
 
         euint64 price = FHE.asEuint64(amountUsdc);
-        euint64 observerFee = FHE.asEuint64(observerDetails[observerAddress].observerFees);
-        euint64 platformFee = FHE.div(FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))), FHE.asEuint64(uint64(10000)));
+        euint64 observerFee = observerDetails[observerAddress].observerFees;
+        euint64 platformFee = FHE.div(
+            FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))),
+            FHE.asEuint64(uint64(10000))
+        );
         euint64 total = FHE.add(FHE.add(price, observerFee), platformFee);
 
         FHE.allowThis(total);
@@ -372,7 +375,10 @@ contract Observer {
     ///         env var on the observer daemon and call this once after registering.
     function setObserverFees(uint64 newFees) external {
         require(isObserver[msg.sender], "Not registered");
-        observerDetails[msg.sender].observerFees = newFees;
+        euint64 encFees = FHE.asEuint64(newFees);
+        FHE.allowThis(encFees);
+        FHE.allow(encFees, msg.sender);
+        observerDetails[msg.sender].observerFees = encFees;
     }
 
     /// @notice Admin activates or deactivates a product type in the catalog.
@@ -447,18 +453,7 @@ contract Observer {
         )
     {
         Order storage o = orders[orderId];
-        return
-            (
-                o.buyer,
-                o.observer,
-                o.encProductId,
-                o.encPaid,
-                o.platformFee,
-                o.encAesKey,
-                o.ipfsCid,
-                o.deadline,
-                o.status
-            );
+        return (o.buyer, o.observer, o.encProductId, o.encPaid, o.platformFee, o.encAesKey, o.ipfsCid, o.deadline, o.status);
     }
 
     function getPendingOrder(uint256 pendingId)

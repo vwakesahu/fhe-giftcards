@@ -56,7 +56,7 @@ export function CUsdcIcon({ size = 16, ...props }: { size?: number } & SVGProps<
         />
       </g>
       {/* Dark backing disc for the Fhenix star (cuts into the coin) */}
-      <circle cx="33" cy="33" r="11" fill="#050505" />
+      <circle cx="33" cy="33" r="11" fill="#0d0c0a" />
       {/* Fhenix star, cyan, centered at (33,33) ~14 wide */}
       <g transform="translate(33 33) scale(0.28) translate(-368.7 -20.5)">
         <path

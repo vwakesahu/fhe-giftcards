@@ -336,8 +336,8 @@ function SealBox() {
       <line
         x1={x + 28}
         x2={x + w - 28}
-        y1={y + h - 50}
-        y2={y + h - 50}
+        y1={y + h - 60}
+        y2={y + h - 60}
         stroke="currentColor"
         strokeOpacity="0.12"
       />
@@ -346,7 +346,7 @@ function SealBox() {
           the two read as a stacked group, not collided lines. */}
       <text
         x={x + w / 2}
-        y={y + h - 44}
+        y={y + h - 40}
         textAnchor="middle"
         fill="currentColor"
         fillOpacity="0.4"
@@ -507,7 +507,7 @@ function MobileSeal({ inView }: { inView: boolean }) {
 
       <div className="w-full h-px bg-foreground/10 mb-4" />
 
-      <p className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-foreground/40 mb-4">
+      <p className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-foreground/40 mb-2">
         ENCRYPTION ENGINE
       </p>
       <Image

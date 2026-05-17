@@ -15,8 +15,9 @@ export const GAS_CEILING = {
   cusdcApprove: 500_000n, // encrypted allowance, FHE-heavy
   cusdcRequestUnwrap: 800_000n,
 
-  // Sigill checkout
-  sigillPlaceOrder: 1_500_000n,
+  // Sigill checkout (two-step: quote → approve → confirm)
+  sigillQuoteOrder: 1_500_000n,
+  sigillConfirmOrder: 1_500_000n,
 } as const;
 
 const BUFFER_NUM = 130n;

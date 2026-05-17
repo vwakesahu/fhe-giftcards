@@ -46,5 +46,21 @@ task('deploy-sigill', 'Deploy ConfidentialERC20 (cUSDC) + Sigill').setAction(
 		const sigillAddress = await sigill.getAddress()
 		saveDeployment(network.name, 'Sigill', sigillAddress)
 		console.log(`  Sigill: ${sigillAddress}`)
+
+		// Seed the product catalogue. quoteOrder reverts on an unknown product,
+		// so without this the buy wizard can't place its first order. The IDs
+		// here mirror PRODUCTS in packages/app/src/lib/contracts.ts. Override
+		// with PRODUCT_IDS=1,2,3 in the env to deploy a different set.
+		const productIds = (process.env.PRODUCT_IDS ?? '1,2,3')
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.map((s) => BigInt(s))
+		console.log(`Activating products: ${productIds.join(', ')}`)
+		for (const pid of productIds) {
+			const tx = await (sigill as any).setProductActive(pid, true)
+			await tx.wait()
+		}
+		console.log('  Products activated')
 	}
 )

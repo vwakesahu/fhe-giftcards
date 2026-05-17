@@ -14,6 +14,7 @@ type RawObserver = {
   sucessRate: bigint;
   slotLeft: bigint;
   soltSize: bigint;
+  observerFees: bigint;
 };
 
 /**

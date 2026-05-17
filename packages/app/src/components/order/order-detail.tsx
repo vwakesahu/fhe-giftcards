@@ -85,10 +85,11 @@ export function OrderDetail({ orderId }: { orderId: string }) {
         observer: o[1],
         encProductId: o[2],
         encPaid: o[3],
-        encAesKey: o[4],
-        ipfsCid: o[5],
-        deadline: o[6],
-        status: Number(o[7]),
+        platformFee: o[4],
+        encAesKey: o[5],
+        ipfsCid: o[6],
+        deadline: o[7],
+        status: Number(o[8]),
       };
     },
     refetchInterval: 5_000,
@@ -327,7 +328,7 @@ function ReadyToOpen({
           disabled={opening || !isBuyer}
           whileTap={opening || !isBuyer ? {} : { scale: 0.97 }}
           transition={{ duration: 0.12 }}
-          className="h-9 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="h-9 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <AnimatePresence mode="wait" initial={false}>
             {opening ? (
@@ -338,7 +339,7 @@ function ReadyToOpen({
                 exit={{ opacity: 0 }}
                 className="inline-flex items-center gap-2"
               >
-                <Spinner size={12} className="text-[#050505]" />
+                <Spinner size={12} className="text-[#0d0c0a]" />
                 Unsealing
               </motion.span>
             ) : (

@@ -19,9 +19,6 @@ export const config = {
   rpcUrl: req("BASE_SEPOLIA_RPC_URL"),
   sigillAddress: req("SIGILL_ADDRESS") as `0x${string}`,
   cUSDCAddress: req("CUSDC_ADDRESS") as `0x${string}`,
-  // Flat fee charged per order (USDC 6-decimal base units). Edit OBSERVER_FEES
-  // in .env, then call setObserverFees on-chain to sync the contract.
-  observerFees: BigInt(opt("OBSERVER_FEES", "0")),
   pollIntervalMs: Number(opt("POLL_INTERVAL_MS", "10000")),
   explorer: "https://sepolia.basescan.org",
 } as const;

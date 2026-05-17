@@ -543,7 +543,7 @@ export function BalancesPanel() {
           </div>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-white/4 flex items-center justify-between gap-3">
+        <div className="mt-4 pt-4 border-t border-white/4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <p className="text-[11.5px] text-muted-foreground/55">
             Claim 1,000 USDC from the faucet. Capped per call.
           </p>
@@ -771,7 +771,7 @@ function MintButton({
       disabled={busy || disabled}
       whileTap={busy || disabled ? {} : { scale: 0.97 }}
       transition={{ duration: 0.12 }}
-      className="h-8 px-3.5 text-[12px] font-medium border border-white/10 hover:border-white/25 text-muted-foreground/80 hover:text-foreground rounded-full inline-flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      className="h-8 px-3.5 text-[12px] font-medium border border-white/10 hover:border-white/25 text-muted-foreground/80 hover:text-foreground rounded-full inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
     >
       <AnimatePresence mode="wait" initial={false}>
         {justMinted ? (
@@ -833,7 +833,7 @@ function ModeToggle({
             disabled={disabled}
             className={`relative h-6 px-3 text-[11px] font-medium uppercase tracking-[0.06em] rounded-full transition-colors disabled:opacity-40 ${
               active
-                ? "text-[#050505]"
+                ? "text-[#0d0c0a]"
                 : "text-muted-foreground/60 hover:text-foreground"
             }`}
           >
@@ -876,7 +876,7 @@ function ActionButton({
       disabled={disabled}
       whileTap={disabled ? {} : { scale: 0.98 }}
       transition={{ duration: 0.12 }}
-      className="mt-4 w-full h-10 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 rounded-full inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      className="mt-4 w-full h-10 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 rounded-full inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
     >
       <AnimatePresence mode="wait" initial={false}>
         {busy ? (
@@ -887,7 +887,7 @@ function ActionButton({
             exit={{ opacity: 0 }}
             className="inline-flex items-center gap-2"
           >
-            <Spinner size={12} className="text-[#050505]" />
+            <Spinner size={12} className="text-[#0d0c0a]" />
             {busyLabel}
           </motion.span>
         ) : justDone ? (

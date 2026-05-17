@@ -22,7 +22,6 @@ async function main() {
   console.log(`  observer : ${wallet.address}`);
   console.log(`  sigill   : ${config.sigillAddress}`);
   console.log(`  cUSDC    : ${config.cUSDCAddress}`);
-  console.log(`  fee/order: ${Number(config.observerFees) / 1e6} USDC (OBSERVER_FEES in .env)`);
 
   // Sanity: are we bonded on this Sigill? If not, fail fast so the operator
   // registers before the loop starts wasting RPC calls.
@@ -30,23 +29,11 @@ async function main() {
   if (bond < MIN_BOND) {
     console.error(
       `\n  ✗ observer not bonded on this Sigill (bond=${ethers.formatEther(bond)} ETH, need ≥ 0.01)\n` +
-        `    register first: cd packages/contracts && OBSERVER_FEES=${config.observerFees} pnpm hardhat register-observer --network base-sepolia`,
+        `    register first: cd packages/contracts && OBSERVER_PRIVATE_KEY=… pnpm hardhat register-observer`,
     );
     process.exit(1);
   }
   console.log(`  bond     : ${ethers.formatEther(bond)} ETH ✓`);
-
-  // Sync OBSERVER_FEES from .env to the contract on every startup.
-  // This lets the operator simply edit .env and restart — no manual on-chain call needed.
-  console.log(`  syncing fee ${Number(config.observerFees) / 1e6} USDC → setObserverFees…`);
-  try {
-    const feeTx = await (sigill as any).setObserverFees(config.observerFees, { gasLimit: 500_000n });
-    await feeTx.wait();
-    console.log(`  fee/order: ${Number(config.observerFees) / 1e6} USDC ✓  (tx ${feeTx.hash})`);
-  } catch (err) {
-    console.error(`  ✗ setObserverFees failed:`, err instanceof Error ? err.message : err);
-    process.exit(1);
-  }
 
   // Sanity: are we the cUSDC unwrapper? If so, we also finalise unwrap
   // requests from buyers as they come in. If not, we only process orders.

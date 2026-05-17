@@ -48,7 +48,8 @@ export function ConfirmStep({
         </div>
         <div className="px-5 py-3 border-t border-white/4">
           <p className="text-[11.5px] text-muted-foreground/55 leading-relaxed">
-            Two transactions: approve sealed cUSDC, then <span className="text-foreground/75">placeOrder</span>.
+            Three transactions: <span className="text-foreground/75">quoteOrder</span> for an encrypted total,
+            approve sealed cUSDC, then <span className="text-foreground/75">confirmOrder</span>.
             The observer unseals, fulfils, and drops a code only your wallet can open.
           </p>
         </div>
@@ -116,7 +117,7 @@ function PlaceButton({
       disabled={off}
       whileTap={off ? {} : { scale: 0.98 }}
       transition={{ duration: 0.12 }}
-      className={`h-10 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center justify-center gap-2 ${
+      className={`h-10 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center justify-center gap-2 ${
         placing ? "opacity-80 cursor-progress" : disabled ? "opacity-40 cursor-not-allowed" : ""
       }`}
     >
@@ -129,7 +130,7 @@ function PlaceButton({
             exit={{ opacity: 0 }}
             className="inline-flex items-center gap-2"
           >
-            <Spinner size={12} className="text-[#050505]" />
+            <Spinner size={12} className="text-[#0d0c0a]" />
             Sealing
           </motion.span>
         ) : (
