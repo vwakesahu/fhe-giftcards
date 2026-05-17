@@ -19,6 +19,16 @@ contract Observer {
     event OrderFulfilled(uint256 indexed orderId, string ipfsCid);
     event OrderRejected(uint256 indexed orderId, string reason);
     event OrderRefunded(uint256 indexed orderId);
+    // Buyer-side listens for this to learn the encrypted total handle, unseals
+    // it via cofhejs, then approves cUSDC for exactly that plaintext amount.
+    event OrderQuoted(
+        uint256 indexed pendingId,
+        address indexed buyer,
+        address indexed observer,
+        uint256 productId,
+        uint256 expectedTotalHandle,
+        uint256 expiresAt
+    );
 
     enum Status {
         Pending,
@@ -33,9 +43,14 @@ contract Observer {
         address buyer;
         address observer;
         euint64 encProductId;
-        euint64 encPaid; // cUSDC escrowed for this order
-        euint128 encAesKey; // filled on fulfillment
-        string ipfsCid; // filled on fulfillment
+        // Total escrowed at confirm: price + observerFee + platformFee.
+        // 0 if the buyer's approved amount didn't equal the quoted total —
+        // FHE.select zeroes it silently, observer sees 0 and rejects.
+        euint64 encPaid;
+        // Split off at fulfillment and sent to PROTOCOL_VALUT.
+        euint64 platformFee;
+        euint128 encAesKey;
+        string ipfsCid;
         uint256 deadline;
         Status status;
     }
@@ -45,33 +60,64 @@ contract Observer {
         uint256 sucessRate;
         uint256 slotLeft;
         uint256 soltSize;
+        euint64 observerFees;
+    }
+
+    // Stash of contract-computed totals between quoteOrder and confirmOrder.
+    // confirmOrder reads `expectedTotal` and FHE.eq's it against what the
+    // buyer actually approved — that's the tamper-resistance guarantee.
+    struct PendingOrder {
+        address buyer;
+        address observer;
+        uint256 productId;
+        euint64 expectedTotal;
+        euint64 platformFee;
+        uint256 expiresAt;
     }
 
     uint256 private constant MIN_BOND_AMOUNT = 0.01 ether;
     uint256 public constant ORDER_TIMEOUT = 10 minutes;
+    uint256 public constant QUOTE_TTL = 5 minutes;
     uint32 public constant PRICISION = 1000000;
-
+    // Platform fee in per-mille — 25 / 1000 = 2.5%.
+    uint256 private constant PLATFORM_FEE = 25;
+    address private constant PROTOCOL_VALUT = 0x37DFfFfB73b4A7eE6584F1ea56bac618c29c6882;
     ConfidentialERC20 public immutable cUSDC;
 
+    address public admin;
     uint256 public nextOrderId;
+    uint256 public nextPendingId;
+
     address[] public observers;
     mapping(address => bool) private isObserver;
     mapping(address => uint256) private observerTocompeleteness;
     mapping(uint256 => address[]) private compeltenessToobserver;
     mapping(address => uint256) private orderCompeleted;
     mapping(address => ObserverDetails) private observerDetails;
-    mapping(address => uint256[]) private orderQueue; //putted orders in queue
+    mapping(address => uint256[]) private orderQueue;
     mapping(address => uint256) private orderIndex;
-    mapping(address => uint256) private observerBondAmount; // done
-    mapping(uint256 => Order) private orders; //done
+    mapping(address => uint256) private observerBondAmount;
+    mapping(uint256 => Order) private orders;
     mapping(address => uint256) private orderReject;
 
-    function registerObserver() external payable {
+    mapping(uint256 => PendingOrder) private pending;
+    mapping(uint256 => uint64) public productPriceUsdc;
+    mapping(uint256 => bool) public productActive;
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Not admin");
+        _;
+    }
+
+    function registerObserver(uint64 fees) external payable {
         require(msg.value >= MIN_BOND_AMOUNT, "Bond too low");
         observerBondAmount[msg.sender] += msg.value;
         observers.push(msg.sender);
         isObserver[msg.sender] = true;
-        observerDetails[msg.sender] = ObserverDetails(msg.sender, 0, 4, 4);
+        euint64 encFees = FHE.asEuint64(fees);
+        FHE.allowThis(encFees);
+        FHE.allow(encFees, msg.sender);
+        observerDetails[msg.sender] = ObserverDetails(msg.sender, 0, 4, 4, encFees);
         emit ObserverRegistered(msg.sender, observerBondAmount[msg.sender]);
     }
 
@@ -108,45 +154,116 @@ contract Observer {
         order.status = Status.Pending;
     }
 
-    function _placeOrder(InEuint64 calldata encProductId, address observerAddress) internal returns (uint256) {
+    /// @notice Step 1 — compute the encrypted total (price + observerFee +
+    ///         platformFee) and stash it. Emits OrderQuoted with the handle
+    ///         so the buyer's frontend can unseal it and prepare the approve.
+    function _quoteOrder(uint256 productId, address observerAddress) internal returns (uint256 pendingId) {
+        require(productActive[productId], "unknown product");
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
         require(observerDetails[observerAddress].slotLeft > 0, "Observers queue is full");
-        euint64 productId = FHE.asEuint64(encProductId);
-        FHE.allowThis(productId);
-        FHE.allow(productId, observerAddress);
 
-        // Pull the full allowance — its value was set when the buyer called
-        // approve, bound to them. transferFromAllowance returns the amount
-        // actually moved (clamped by balance) and zeroes the allowance.
-        observerDetails[observerAddress].slotLeft--;
+        euint64 price = FHE.asEuint64(productPriceUsdc[productId]);
+        euint64 observerFee = observerDetails[observerAddress].observerFees;
+        euint64 platformFee = FHE.div(
+            FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))),
+            FHE.asEuint64(uint64(1000))
+        );
+        euint64 total = FHE.add(FHE.add(price, observerFee), platformFee);
+
+        FHE.allowThis(total);
+        FHE.allow(total, msg.sender);
+        FHE.allowThis(platformFee);
+
+        pendingId = nextPendingId++;
+        uint256 exp = block.timestamp + QUOTE_TTL;
+        pending[pendingId] = PendingOrder({
+            buyer: msg.sender,
+            observer: observerAddress,
+            productId: productId,
+            expectedTotal: total,
+            platformFee: platformFee,
+            expiresAt: exp
+        });
+
+        emit OrderQuoted(pendingId, msg.sender, observerAddress, productId, euint64.unwrap(total), exp);
+    }
+
+    /// @notice Step 2 — pull the buyer's pre-approved allowance, verify it
+    ///         equals the quoted total via FHE.eq, refund in-place if not.
+    ///         No amount parameter — the buyer can't tamper because the
+    ///         comparison value is the stored expectedTotal.
+    function _confirmOrder(uint256 pendingId) internal returns (uint256 orderId) {
+        PendingOrder storage p = pending[pendingId];
+        require(p.buyer != address(0), "Unknown quote");
+        require(p.buyer == msg.sender, "Not buyer");
+        require(block.timestamp <= p.expiresAt, "Quote expired");
+
+        address observerAddr = p.observer;
+
+        // Mint a fresh encProductId from the stashed plaintext — observer
+        // gets ACL so they can decrypt during fulfilment. Buyer never
+        // supplies an InEuint64 here, so there's nothing to forge.
+        euint64 productIdHandle = FHE.asEuint64(p.productId);
+        FHE.allowThis(productIdHandle);
+        FHE.allow(productIdHandle, observerAddr);
+
         euint64 paid = cUSDC.transferFromAllowance(msg.sender, address(this));
-        FHE.allowThis(paid);
-        FHE.allow(paid, observerAddress);
 
-        uint256 orderId = nextOrderId++;
+        // Encrypted-domain enforcement of "paid == quoted".
+        ebool ok = FHE.eq(paid, p.expectedTotal);
+        euint64 escrowed = FHE.select(ok, paid, FHE.asEuint64(uint64(0)));
+        euint64 refundIfBad = FHE.select(ok, FHE.asEuint64(uint64(0)), paid);
+        euint64 platformFee = FHE.select(ok, p.platformFee, FHE.asEuint64(uint64(0)));
+
+        // Same-tx refund of the bad amount. Indistinguishable from a 0
+        // transfer on the outside — no leak about whether the check passed.
+        FHE.allowThis(refundIfBad);
+        FHE.allowTransient(refundIfBad, address(cUSDC));
+        cUSDC.transferEncrypted(msg.sender, refundIfBad);
+
+        FHE.allowThis(escrowed);
+        FHE.allow(escrowed, observerAddr);
+        FHE.allowThis(platformFee);
+
+        observerDetails[observerAddr].slotLeft--;
+
+        orderId = nextOrderId++;
+        _writeOrderAndQueue(orderId, observerAddr, productIdHandle, escrowed, platformFee);
+
+        delete pending[pendingId];
+    }
+
+    // Split out from _confirmOrder to keep the locals count under the
+    // stack-depth threshold even with viaIR optimisations.
+    function _writeOrderAndQueue(
+        uint256 orderId,
+        address observerAddr,
+        euint64 productIdHandle,
+        euint64 escrowed,
+        euint64 platformFee
+    ) internal {
         Order storage order = orders[orderId];
         order.buyer = msg.sender;
-        order.observer = observerAddress;
-        order.encProductId = productId;
-        order.encPaid = paid;
+        order.observer = observerAddr;
+        order.encProductId = productIdHandle;
+        order.encPaid = escrowed;
+        order.platformFee = platformFee;
         order.deadline = block.timestamp;
-        orderQueue[observerAddress].push(orderId);
-        // First active order in the queue is Pending immediately with a fresh
-        // deadline; everything behind it sits Queued (deadline stays at creation
-        // time) until the head fulfils/rejects, at which point
-        // _nextOrderStatusUpdate flips the next one to Pending.
-        if (orderQueue[observerAddress].length - orderIndex[observerAddress] == 1) {
+        orderQueue[observerAddr].push(orderId);
+
+        if (orderQueue[observerAddr].length - orderIndex[observerAddr] == 1) {
             uint256 deadline = block.timestamp + ORDER_TIMEOUT;
             order.deadline = deadline;
             order.status = Status.Pending;
             emit OrderInProccessed(
-                orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress, deadline
+                orderId, msg.sender, euint64.unwrap(productIdHandle), euint64.unwrap(escrowed), observerAddr, deadline
             );
         } else {
             order.status = Status.Queued;
-            emit OrderInQueued(orderId, msg.sender, euint64.unwrap(productId), euint64.unwrap(paid), observerAddress);
+            emit OrderInQueued(
+                orderId, msg.sender, euint64.unwrap(productIdHandle), euint64.unwrap(escrowed), observerAddr
+            );
         }
-        return orderId;
     }
 
     function _fulfillOrder(uint256 orderId, InEuint128 calldata encAesKey, string calldata ipfsCid) internal {
@@ -187,13 +304,18 @@ contract Observer {
                 break;
             }
         }
-        // Pay the observer in cUSDC. Transient ACL so cUSDC can read the handle
-        // for this call only.
-        FHE.allowTransient(order.encPaid, address(cUSDC));
-        cUSDC.transferEncrypted(order.observer, order.encPaid);
+        // Split escrow: observer gets (encPaid - platformFee), platform vault gets platformFee.
+        // If the buyer's payment was mismatched at confirm time, encPaid and
+        // platformFee are both 0 — so both transfers are no-ops.
+        euint64 observerCut = FHE.sub(order.encPaid, order.platformFee);
+        FHE.allowThis(observerCut);
+        FHE.allowTransient(observerCut, address(cUSDC));
+        cUSDC.transferEncrypted(order.observer, observerCut);
+
+        FHE.allowTransient(order.platformFee, address(cUSDC));
+        cUSDC.transferEncrypted(PROTOCOL_VALUT, order.platformFee);
+
         emit OrderFulfilled(orderId, ipfsCid);
-        // Promote the next entry to Pending only if there's one waiting; the
-        // queue may be drained, in which case there's nothing to update.
         if (orderIndex[msg.sender] < orderQueue[msg.sender].length) {
             _nextOrderStatusUpdate(orderQueue[msg.sender][orderIndex[msg.sender]]);
         }
@@ -213,7 +335,6 @@ contract Observer {
         orderReject[msg.sender]++;
         orderIndex[msg.sender]++;
         emit OrderRejected(orderId, reason);
-        // Same drained-queue guard as _fulfillOrder.
         if (orderIndex[msg.sender] < orderQueue[msg.sender].length) {
             _nextOrderStatusUpdate(orderQueue[msg.sender][orderIndex[msg.sender]]);
         }
@@ -223,10 +344,7 @@ contract Observer {
         Order storage order = orders[orderId];
         require(msg.sender == order.buyer, "Not buyer");
         require(block.timestamp > order.deadline, "Deadline not passed");
-        require(
-            order.status == Status.Pending || order.status == Status.Queued,
-            "Not pending"
-        );
+        require(order.status == Status.Pending || order.status == Status.Queued, "Not pending");
 
         order.status = Status.Refunded;
 
@@ -251,76 +369,55 @@ contract Observer {
         observerBondAmount[observer] -= slash;
     }
 
+    /// @notice Admin seeds the catalog. priceUsdc is plaintext (base units,
+    ///         matches cUSDC's 6 decimals). Set price=0 to deactivate a product.
+    function setProductPrice(uint256 productId, uint64 priceUsdc) external onlyAdmin {
+        productPriceUsdc[productId] = priceUsdc;
+        productActive[productId] = priceUsdc > 0;
+    }
+
     /*//////////////////////////////////////////////////////////////
                             GETTER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Minimum bond required to register as an observer.
-    /// @return Bond amount in wei.
     function getBondAmount() external pure returns (uint256) {
         return MIN_BOND_AMOUNT;
     }
 
-    /// @notice List of all registered observer addresses.
-    /// @return Array of observer addresses.
     function getObservers() external view returns (address[] memory) {
         return observers;
     }
 
-    /// @notice Total number of registered observers.
-    /// @return Count of observers.
     function getObserversCount() external view returns (uint256) {
         return observers.length;
     }
 
-    /// @notice Observer address at a given index in the registry.
-    /// @param index Position in the observers array.
-    /// @return Observer address at that index.
     function getObserverAt(uint256 index) external view returns (address) {
         require(index < observers.length, "Index out of bounds");
         return observers[index];
     }
 
-    /// @notice Completeness score (0-100) for an observer.
-    /// @param observer Address to look up.
-    /// @return Completeness score as a percentage.
     function getCompleteness(address observer) external view returns (uint256) {
         return observerTocompeleteness[observer];
     }
 
-    /// @notice Number of orders successfully completed by an observer.
-    /// @param observer Address to look up.
-    /// @return Count of completed orders.
     function getOrderCompleted(address observer) external view returns (uint256) {
         return orderCompeleted[observer];
     }
 
-    /// @notice Number of orders failed by an observer.
-    /// @param observer Address to look up.
-    /// @return Count of failed orders.
     function getOrderFailed(address observer) external view returns (uint256) {
         uint256 orderProcessed = orderReject[observer] + orderCompeleted[observer];
         return orderQueue[observer].length - orderProcessed;
     }
 
-    /// @notice Full pending order queue for an observer.
-    /// @param observer Address to look up.
-    /// @return Array of pending order IDs.
     function getOrderQueue(address observer) external view returns (uint256[] memory) {
         return orderQueue[observer];
     }
 
-    /// @notice Number of pending orders in an observer's queue.
-    /// @param observer Address to look up.
-    /// @return Length of the queue.
     function getQueueLength(address observer) external view returns (uint256) {
         return orderQueue[observer].length;
     }
 
-    /// @notice Order ID at a specific position in an observer's queue.
-    /// @param observer Address to look up.
-    /// @param index Position in the queue.
-    /// @return Order ID at that position.
     function getQueueAt(address observer, uint256 index) external view returns (uint256) {
         require(index < orderQueue[observer].length, "Index out of bounds");
         return orderQueue[observer][index];
@@ -338,6 +435,7 @@ contract Observer {
             address observer,
             euint64 encProductId,
             euint64 encPaid,
+            euint64 platformFee,
             euint128 encAesKey,
             string memory ipfsCid,
             uint256 deadline,
@@ -345,7 +443,23 @@ contract Observer {
         )
     {
         Order storage o = orders[orderId];
-        return (o.buyer, o.observer, o.encProductId, o.encPaid, o.encAesKey, o.ipfsCid, o.deadline, o.status);
+        return (o.buyer, o.observer, o.encProductId, o.encPaid, o.platformFee, o.encAesKey, o.ipfsCid, o.deadline, o.status);
+    }
+
+    function getPendingOrder(uint256 pendingId)
+        external
+        view
+        returns (
+            address buyer,
+            address observer,
+            uint256 productId,
+            euint64 expectedTotal,
+            euint64 platformFee,
+            uint256 expiresAt
+        )
+    {
+        PendingOrder storage p = pending[pendingId];
+        return (p.buyer, p.observer, p.productId, p.expectedTotal, p.platformFee, p.expiresAt);
     }
 
     function getObserverDetail() external view returns (ObserverDetails[] memory) {
