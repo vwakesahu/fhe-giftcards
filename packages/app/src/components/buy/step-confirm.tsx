@@ -116,7 +116,7 @@ function PlaceButton({
       disabled={off}
       whileTap={off ? {} : { scale: 0.98 }}
       transition={{ duration: 0.12 }}
-      className={`h-10 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center justify-center gap-2 ${
+      className={`h-10 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full inline-flex items-center justify-center gap-2 ${
         placing ? "opacity-80 cursor-progress" : disabled ? "opacity-40 cursor-not-allowed" : ""
       }`}
     >
@@ -129,7 +129,7 @@ function PlaceButton({
             exit={{ opacity: 0 }}
             className="inline-flex items-center gap-2"
           >
-            <Spinner size={12} className="text-[#050505]" />
+            <Spinner size={12} className="text-[#0d0c0a]" />
             Sealing
           </motion.span>
         ) : (

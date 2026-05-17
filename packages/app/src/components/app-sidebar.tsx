@@ -98,7 +98,7 @@ function WalletBlock() {
               <motion.button
                 onClick={openConnectModal}
                 whileTap={{ scale: 0.98 }}
-                className="w-full h-9 px-3 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full"
+                className="w-full h-9 px-3 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full"
               >
                 Connect wallet
               </motion.button>

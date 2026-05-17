@@ -140,7 +140,7 @@ function ObserverRow({
       <span
         className={`size-5 rounded-full flex items-center justify-center ${
           active
-            ? "bg-sp text-[#050505]"
+            ? "bg-sp text-[#0d0c0a]"
             : disabled
               ? "border border-white/6 text-transparent"
               : "border border-white/8 text-transparent group-hover:border-white/20"

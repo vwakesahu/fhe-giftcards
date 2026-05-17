@@ -146,7 +146,7 @@ function PrimaryCTA({ href, children }: { href: string; children: React.ReactNod
   return (
     <Link
       href={href}
-      className="inline-flex items-center gap-2 h-9 px-4 text-[13px] font-medium bg-sp text-[#050505] hover:bg-sp/90 transition-colors rounded-full"
+      className="inline-flex items-center gap-2 h-9 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full"
     >
       {children}
       <ArrowRight className="size-3.5" />

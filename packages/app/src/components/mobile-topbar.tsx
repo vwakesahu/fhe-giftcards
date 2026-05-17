@@ -1,62 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { Inbox, ShoppingBag, Wallet } from "lucide-react";
 
 import { shortAddr } from "@/lib/format";
-
-const NAV = [
-  { title: "Orders", href: "/", Icon: Inbox },
-  { title: "Buy", href: "/buy", Icon: ShoppingBag },
-  { title: "Balances", href: "/wrap", Icon: Wallet },
-];
 
 /**
  * MobileTopbar — replaces the fixed left sidebar at <md.
  *
- * Layout: wordmark left, icon-only nav center, compact wallet pill
- * right. Sits as a fixed top bar so it stays visible during scroll.
- * Same chrome density as the landing's nav so the two surfaces read
- * as one product.
+ * Deliberately minimal: wordmark on the left, wallet pill on the
+ * right. Two elements. Nav lives in <MobileTabbar /> at the bottom
+ * of the screen (iOS/Android standard pattern), which leaves this
+ * bar uncrowded and thumb-reachable.
  */
 export function MobileTopbar() {
-  const pathname = usePathname();
   return (
     <header className="md:hidden fixed inset-x-0 top-0 z-40 h-14 border-b border-white/6 bg-background/95 backdrop-blur-sm">
-      <div className="h-full grid grid-cols-[auto_1fr_auto] items-center gap-3 px-4">
+      <div className="h-full flex items-center justify-between px-4 sm:px-5">
         <Link
           href="/"
-          className="inline-flex items-baseline gap-1.5"
+          className="inline-flex items-baseline"
           aria-label="Sigill"
         >
-          <span className="font-serif text-[20px] leading-none italic tracking-tight text-foreground">
+          <span className="font-serif text-[22px] leading-none italic tracking-tight text-foreground">
             sigill
           </span>
         </Link>
-
-        <nav className="flex items-center justify-center gap-1">
-          {NAV.map(({ href, title, Icon }) => {
-            const isActive =
-              href === "/" ? pathname === "/" : pathname.startsWith(href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                aria-label={title}
-                title={title}
-                className={`size-9 inline-flex items-center justify-center rounded-full transition-colors ${
-                  isActive
-                    ? "bg-white/5 text-foreground"
-                    : "text-muted-foreground/60 hover:bg-white/4 hover:text-foreground"
-                }`}
-              >
-                <Icon className="size-4" strokeWidth={1.8} />
-              </Link>
-            );
-          })}
-        </nav>
 
         <WalletPill />
       </div>
@@ -74,7 +43,7 @@ function WalletPill() {
           return (
             <button
               onClick={openConnectModal}
-              className="h-9 px-3 text-[12px] font-medium bg-sp text-[#0a0a0a] hover:bg-sp/90 transition-colors rounded-full"
+              className="h-9 px-4 text-[13px] font-medium bg-sp text-[#0d0c0a] hover:bg-sp/90 transition-colors rounded-full"
             >
               Connect
             </button>
@@ -87,7 +56,7 @@ function WalletPill() {
               onClick={openChainModal}
               className="h-9 px-3 text-[12px] font-medium text-destructive border border-destructive/40 bg-destructive/10 rounded-full"
             >
-              Wrong net
+              Wrong network
             </button>
           );
         }
@@ -95,9 +64,8 @@ function WalletPill() {
         return (
           <button
             onClick={openAccountModal}
-            className="h-9 px-3 inline-flex items-center gap-2 text-[12px] font-medium rounded-full hover:bg-white/4 transition-colors"
+            className="h-9 px-3.5 inline-flex items-center text-[12.5px] font-medium rounded-full border border-white/10 hover:bg-white/4 transition-colors"
           >
-            <span className="block size-2 rounded-full bg-sp" aria-hidden />
             <span className="tabular-nums">
               {account.ensName ?? shortAddr(account.address, 4, 4)}
             </span>

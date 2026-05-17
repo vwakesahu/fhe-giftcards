@@ -73,7 +73,7 @@ function ProductRow({
       <span
         className={`size-5 rounded-full flex items-center justify-center transition-all ${
           active
-            ? "bg-sp text-[#050505]"
+            ? "bg-sp text-[#0d0c0a]"
             : "border border-white/[0.08] text-transparent group-hover:border-white/20"
         }`}
       >
