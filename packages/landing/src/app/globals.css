@@ -49,50 +49,54 @@
 }
 
 :root {
-  --radius: 0.5rem;
-  --background: #fafafa;
-  --foreground: #0a0a0a;
+  --radius: 0.75rem;
+  --background: #f7f6f3;
+  --foreground: #111110;
   --card: #ffffff;
-  --card-foreground: #0a0a0a;
+  --card-foreground: #111110;
   --popover: #ffffff;
-  --popover-foreground: #0a0a0a;
-  --primary: #0a0a0a;
-  --primary-foreground: #fafafa;
-  --secondary: #f0f0f0;
-  --secondary-foreground: #0a0a0a;
-  --muted: #f0f0f0;
-  --muted-foreground: #737373;
-  --accent: #f0f0f0;
-  --accent-foreground: #0a0a0a;
-  --destructive: #dc2626;
-  --border: #e5e5e5;
-  --input: #e5e5e5;
+  --popover-foreground: #111110;
+  --primary: #111110;
+  --primary-foreground: #f7f6f3;
+  --secondary: #efeee9;
+  --secondary-foreground: #111110;
+  --muted: #efeee9;
+  --muted-foreground: #6e6c66;
+  --accent: #efeee9;
+  --accent-foreground: #111110;
+  --destructive: #c84a3b;
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.08);
   --ring: #a3a3a3;
-  --sp: #10b981;
-  --cyan: #06b6d4;
+  --sp: #3a7a5f;
+  --cyan: #3a7a5f;
 }
 
 .dark {
-  --background: #020202;
-  --foreground: #e5e5e5;
-  --card: #0a0a0a;
-  --card-foreground: #e5e5e5;
-  --popover: #0a0a0a;
-  --popover-foreground: #e5e5e5;
-  --primary: #e5e5e5;
-  --primary-foreground: #020202;
-  --secondary: #0a0a0a;
-  --secondary-foreground: #e5e5e5;
-  --muted: #0a0a0a;
-  --muted-foreground: #555555;
-  --accent: #0a0a0a;
-  --accent-foreground: #e5e5e5;
+  /* Warm near-black, not the harsh #020202 */
+  --background: #0d0c0a;
+  --foreground: #f0ece4;
+  --card: #141310;
+  --card-foreground: #f0ece4;
+  --popover: #141310;
+  --popover-foreground: #f0ece4;
+  --primary: #f0ece4;
+  --primary-foreground: #0d0c0a;
+  --secondary: #1a1815;
+  --secondary-foreground: #f0ece4;
+  --muted: #1a1815;
+  --muted-foreground: #8a857a;
+  --accent: #1a1815;
+  --accent-foreground: #f0ece4;
   --destructive: #ef4444;
-  --border: rgba(255, 255, 255, 0.05);
-  --input: rgba(255, 255, 255, 0.06);
-  --ring: #333333;
-  --sp: #34d399;
-  --cyan: #22d3ee;
+  --border: rgba(240, 236, 228, 0.08);
+  --input: rgba(240, 236, 228, 0.08);
+  --ring: rgba(240, 236, 228, 0.25);
+  /* Sage shifted halfway toward the app's bright mint (#34d399).
+     Used sparingly: ambient backdrop glow, selection highlights.
+     The literal hero mock uses #34d399 directly so it mirrors the app. */
+  --sp: #7dd4a4;
+  --cyan: #7dd4a4;
 }
 
 @layer base {
@@ -101,9 +105,11 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background: rgba(52, 211, 153, 0.25);
+    background: rgba(125, 212, 164, 0.25);
   }
 }
 
@@ -111,58 +117,42 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Film grain */
-.grain::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+/* ──────────────────────────────────────────────────────────────
+   Motion tokens. Following Emil Kowalski's easing blueprint:
+   • ease-out for elements entering the screen
+   • ease-in-out for movement on-screen
+   • subtle, never longer than 600ms outside of marketing moments
+   ────────────────────────────────────────────────────────────── */
+:root {
+  --ease-out-quart: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-in-out-cubic: cubic-bezier(0.645, 0.045, 0.355, 1);
 }
 
-/* Scanline effect */
-.scanlines::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 0, 0, 0.03) 2px,
-    rgba(0, 0, 0, 0.03) 4px
-  );
+/* A floating drift used by the hero card. ease-in-out because the
+   element is already on screen and continuously moving. */
+@keyframes float {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-6deg); }
+  50%      { transform: translate3d(0, -10px, 0) rotate(-6deg); }
 }
 
-/* Terminal cursor blink */
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
-.cursor-blink {
-  animation: blink 1s step-end infinite;
+@keyframes shimmer {
+  0%   { background-position: 200% 50%; }
+  100% { background-position: -200% 50%; }
 }
 
-/* Glow text */
-.glow-text {
-  text-shadow: 0 0 20px rgba(52, 211, 153, 0.3), 0 0 40px rgba(52, 211, 153, 0.1);
-}
-.glow-cyan {
-  text-shadow: 0 0 20px rgba(34, 211, 238, 0.3), 0 0 40px rgba(34, 211, 238, 0.1);
+@keyframes cursor-blink {
+  0%, 50%    { opacity: 1; }
+  51%, 100%  { opacity: 0; }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 3px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(52, 211, 153, 0.15);
-  border-radius: 2px;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

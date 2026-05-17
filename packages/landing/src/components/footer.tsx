@@ -1,91 +1,97 @@
 "use client";
 
 import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
 import Image from "next/image";
+import { useRef } from "react";
 
-const ease = [0.16, 1, 0.3, 1] as const;
+import {
+  APP_URL,
+  BRAND_NAME,
+  CTA_OPEN_APP,
+  CTA_VIEW_GITHUB,
+  FHENIX_URL,
+  GITHUB_URL,
+} from "@/lib/constants";
+import { GithubGlyph, SigillWordmark } from "./icons";
 
-const closingLines = [
-  "> no surveillance",
-  "> no exposure",
-  "> no compromise",
-  ">",
-  "> sigill.sol ready \u2713",
-  "> base sepolia: live",
-  "> fhe: default \u2713",
-];
+const ease = [0.165, 0.84, 0.44, 1] as const;
 
 export function Footer() {
-  const ref = useRef(null);
-  const isInView = useInView(ref, { once: true, margin: "-10%" });
+  const ref = useRef<HTMLDivElement | null>(null);
+  const inView = useInView(ref, { once: true, margin: "-10%" });
 
   return (
-    <footer className="px-6 sm:px-10 pt-40 pb-10">
-      <div className="max-w-[1400px] mx-auto">
-        {/* Terminal closing */}
+    <footer className="px-6 sm:px-8 pt-24 sm:pt-32 pb-10">
+      <div ref={ref} className="max-w-6xl mx-auto">
+        {/* Closing CTA: one last clear ask. */}
         <motion.div
-          ref={ref}
-          initial={{ opacity: 0 }}
-          animate={isInView ? { opacity: 1 } : {}}
-          transition={{ duration: 1, ease }}
-          className="mb-20"
+          initial={{ opacity: 0, y: 20 }}
+          animate={inView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.8, ease }}
+          className="mb-20 sm:mb-28 max-w-3xl"
         >
-          <div className="font-mono text-sm space-y-2 mb-16">
-            {closingLines.map((line, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, x: -10 }}
-                animate={isInView ? { opacity: 1, x: 0 } : {}}
-                transition={{ duration: 0.4, delay: i * 0.12, ease }}
-                className={
-                  line.includes("\u2713") ? "text-sp glow-text" : "text-sp/50"
-                }
-              >
-                {line}
-              </motion.div>
-            ))}
-          </div>
+          <h2 className="text-[clamp(2rem,5.5vw,4.5rem)] font-medium leading-[1.02] tracking-[-0.035em]">
+            Spend in private.
+            <br />
+            <span className="text-foreground/55">Settle on Base.</span>
+          </h2>
 
-          {/* Tagline */}
-          <div className="flex items-baseline gap-4">
-            {["PAID.", "PRIVATE.", "PERIOD."].map((word, i) => (
-              <motion.span
-                key={word}
-                initial={{ opacity: 0, y: 20 }}
-                animate={isInView ? { opacity: 1, y: 0 } : {}}
-                transition={{ duration: 0.8, delay: 1.2 + i * 0.2, ease }}
-                className="font-mono text-[clamp(1.5rem,3vw,3rem)] tracking-[0.1em] text-sp glow-text"
-              >
-                {word}
-              </motion.span>
-            ))}
+          <div className="mt-10 flex items-center gap-3 flex-wrap">
+            <a
+              href={APP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-center gap-2 rounded-full bg-foreground text-background pl-5 pr-4 py-3 text-[14px] font-medium hover:opacity-90 transition-opacity"
+            >
+              {CTA_OPEN_APP}
+              <span aria-hidden>→</span>
+            </a>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full border border-foreground/20 px-4 py-3 text-[14px] font-medium text-foreground/85 hover:bg-foreground/5 hover:text-foreground transition-colors"
+            >
+              <GithubGlyph />
+              {CTA_VIEW_GITHUB}
+            </a>
           </div>
         </motion.div>
 
-        {/* Bottom bar */}
-        <div className="border-t border-border pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="font-mono text-xs text-muted-foreground">
-            sigill<span className="text-muted-foreground/40">_</span>
+        {/* Bottom line: just the essentials. */}
+        <div className="border-t border-foreground/10 pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-[13px] text-foreground/55">
+          <SigillWordmark className="text-[15px] text-foreground/85" />
+          {/* BRAND_NAME export still wins the page title + a11y labels;
+              the wordmark renders the visible mark. */}
+
+          <div className="flex items-center gap-5">
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${BRAND_NAME} on GitHub`}
+              className="inline-flex items-center text-foreground/55 hover:text-foreground transition-colors"
+            >
+              <GithubGlyph />
+            </a>
+            <a
+              href={FHENIX_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-center gap-2 hover:text-foreground transition-colors"
+            >
+              <span>Built with</span>
+              <Image
+                src="/fhenix.svg"
+                alt="Fhenix"
+                width={64}
+                height={14}
+                className="opacity-60 group-hover:opacity-100 transition-opacity"
+              />
+            </a>
           </div>
-          <a
-            href="https://fhenix.io"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group flex items-center gap-3 font-mono text-[10px] text-muted-foreground/50 tracking-[0.15em] uppercase hover:text-muted-foreground transition-colors"
-          >
-            <span>Powered by</span>
-            <Image
-              src="/fhenix.svg"
-              alt="Fhenix"
-              width={72}
-              height={16}
-              className="opacity-60 group-hover:opacity-100 transition-opacity"
-            />
-          </a>
-          <div className="font-mono text-[10px] text-muted-foreground/40">
-            Privacy by default
-          </div>
+
+          <span>&copy; {new Date().getFullYear()} {BRAND_NAME}</span>
         </div>
       </div>
     </footer>
