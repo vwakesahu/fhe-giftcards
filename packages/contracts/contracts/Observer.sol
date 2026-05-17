@@ -79,7 +79,7 @@ contract Observer {
     uint256 public constant ORDER_TIMEOUT = 10 minutes;
     uint256 public constant QUOTE_TTL = 5 minutes;
     uint32 public constant PRICISION = 1000000;
-    // Platform fee in per-mille — 25 / 1000 = 2.5%.
+    // Platform fee — 25 / 10000 = 0.25%.
     uint256 private constant PLATFORM_FEE = 25;
     address private constant PROTOCOL_VALUT = 0x37DFfFfB73b4A7eE6584F1ea56bac618c29c6882;
     ConfidentialERC20 public immutable cUSDC;
@@ -101,7 +101,6 @@ contract Observer {
     mapping(address => uint256) private orderReject;
 
     mapping(uint256 => PendingOrder) private pending;
-    mapping(uint256 => uint64) public productPriceUsdc;
     mapping(uint256 => bool) public productActive;
 
     modifier onlyAdmin() {
@@ -157,16 +156,17 @@ contract Observer {
     /// @notice Step 1 — compute the encrypted total (price + observerFee +
     ///         platformFee) and stash it. Emits OrderQuoted with the handle
     ///         so the buyer's frontend can unseal it and prepare the approve.
-    function _quoteOrder(uint256 productId, address observerAddress) internal returns (uint256 pendingId) {
+    function _quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc) internal returns (uint256 pendingId) {
         require(productActive[productId], "unknown product");
+        require(amountUsdc > 0, "Amount must be > 0");
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
         require(observerDetails[observerAddress].slotLeft > 0, "Observers queue is full");
 
-        euint64 price = FHE.asEuint64(productPriceUsdc[productId]);
+        euint64 price = FHE.asEuint64(amountUsdc);
         euint64 observerFee = observerDetails[observerAddress].observerFees;
         euint64 platformFee = FHE.div(
             FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))),
-            FHE.asEuint64(uint64(1000))
+            FHE.asEuint64(uint64(10000))
         );
         euint64 total = FHE.add(FHE.add(price, observerFee), platformFee);
 
@@ -370,11 +370,20 @@ contract Observer {
         observerBondAmount[observer] -= slash;
     }
 
-    /// @notice Admin seeds the catalog. priceUsdc is plaintext (base units,
-    ///         matches cUSDC's 6 decimals). Set price=0 to deactivate a product.
-    function setProductPrice(uint256 productId, uint64 priceUsdc) external onlyAdmin {
-        productPriceUsdc[productId] = priceUsdc;
-        productActive[productId] = priceUsdc > 0;
+    /// @notice Observer updates their flat fee (in cUSDC base units, 6 dec).
+    ///         Effective for all future quoteOrder calls. Set in OBSERVER_FEES
+    ///         env var on the observer daemon and call this once after registering.
+    function setObserverFees(uint64 newFees) external {
+        require(isObserver[msg.sender], "Not registered");
+        euint64 encFees = FHE.asEuint64(newFees);
+        FHE.allowThis(encFees);
+        FHE.allow(encFees, msg.sender);
+        observerDetails[msg.sender].observerFees = encFees;
+    }
+
+    /// @notice Admin activates or deactivates a product type in the catalog.
+    function setProductActive(uint256 productId, bool active) external onlyAdmin {
+        productActive[productId] = active;
     }
 
     /*//////////////////////////////////////////////////////////////
