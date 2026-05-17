@@ -148,6 +148,47 @@ export function BuyWizard() {
         throw new Error("Could not unseal quoted total — try again in a moment");
       }
 
+      // ── 2b. Pre-flight balance check ──────────────────────
+      //       cUSDC._clampToBalance returns 0 (not partial) when the
+      //       buyer's sealed balance is below the approved amount. So
+      //       even being 1 base unit short results in transferred=0,
+      //       FHE.eq mismatch in confirmOrder, escrow zeroed, observer
+      //       rejects. Catch it pre-tx by unsealing the buyer's own
+      //       balance handle (buyer always has ACL on their own balance)
+      //       and comparing against the quoted total. Bails early with
+      //       a clear "wrap more USDC" message so the buyer doesn't
+      //       burn ~$0.10 of gas on an approve + confirm + refund dance.
+      if (cUSDCBalanceHandle && cUSDCBalanceHandle !== 0n) {
+        toast.message("Checking sealed balance");
+        let sealedBal: bigint | null = null;
+        for (let i = 0; i < 10; i++) {
+          try {
+            const result = await client
+              .decryptForView(cUSDCBalanceHandle, FheTypes.Uint64)
+              .withPermit()
+              .execute();
+            if (result !== undefined && result !== null) {
+              sealedBal = result as bigint;
+              break;
+            }
+          } catch {
+            // threshold network still processing — retry
+          }
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+        if (sealedBal !== null && sealedBal < quotedTotal) {
+          const fmt = (v: bigint) => {
+            const whole = v / 1_000_000n;
+            const frac = (v % 1_000_000n).toString().padStart(6, "0").slice(0, 2).replace(/0+$/, "");
+            return frac ? `${whole}.${frac}` : `${whole}`;
+          };
+          const need = quotedTotal - sealedBal;
+          throw new Error(
+            `Sealed balance is ${fmt(sealedBal)} cUSDC, need ${fmt(quotedTotal)} — wrap ${fmt(need)} more USDC first`,
+          );
+        }
+      }
+
       // ── 3. Encrypted approve for exactly the quoted total ─
       //      confirmOrder uses FHE.eq to compare the pulled allowance
       //      against the stored expectedTotal; any deviance results in a
