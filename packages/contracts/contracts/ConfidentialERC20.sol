@@ -164,8 +164,8 @@ contract ConfidentialERC20 {
     }
 
     /// @notice Set an encrypted allowance. Overwrites any previous allowance.
-    function approve(address spender, InEuint64 calldata encAmount) external returns (euint64) {
-        euint64 amount = FHE.asEuint64(encAmount);
+    function approve(address spender, euint64 amount) external returns (euint64) {
+        // euint64 amount = FHE.asEuint64(encAmount);
         _allowances[msg.sender][spender] = amount;
         FHE.allowThis(amount);
         FHE.allow(amount, msg.sender);
