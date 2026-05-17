@@ -10,6 +10,7 @@
 		"deploy": "hardhat deploy-sigill",
 		"register": "hardhat register-observer",
 		"e2e": "hardhat run scripts/e2e-cusdc.ts",
+		"e2e-v3": "hardhat run scripts/e2e-cusdc-v3.ts",
 		"test": "hardhat test --network hardhat"
 	},
 	"license": "MIT",

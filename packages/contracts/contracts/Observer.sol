@@ -223,6 +223,7 @@ contract Observer {
 
         FHE.allowThis(escrowed);
         FHE.allow(escrowed, observerAddr);
+        FHE.allow(escrowed, msg.sender); // buyer can see what they paid
         FHE.allowThis(platformFee);
 
         observerDetails[observerAddr].slotLeft--;

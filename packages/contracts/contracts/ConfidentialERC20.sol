@@ -163,15 +163,31 @@ contract ConfidentialERC20 {
         FHE.allow(transferred, msg.sender);
     }
 
-    /// @notice Set an encrypted allowance. Overwrites any previous allowance.
-    function approve(address spender, euint64 amount) external returns (euint64) {
-        // euint64 amount = FHE.asEuint64(encAmount);
-        _allowances[msg.sender][spender] = amount;
-        FHE.allowThis(amount);
-        FHE.allow(amount, msg.sender);
-        FHE.allow(amount, spender);
-        emit Approval(msg.sender, spender);
+    /// @notice EOA-facing approve: caller signs an `InEuint64` (via cofhejs)
+    ///         for the amount they want to authorize. `FHE.asEuint64` mints a
+    ///         fresh handle owned by the caller, so subsequent `FHE.allow*`
+    ///         calls succeed.
+    function approve(address spender, InEuint64 calldata encAmount) external returns (euint64) {
+        euint64 amount = FHE.asEuint64(encAmount);
+        _approve(msg.sender, spender, amount);
         return amount;
+    }
+
+    /// @notice Contract-facing approve: caller passes an existing `euint64`
+    ///         handle that it already has manage rights on. Useful when an
+    ///         escrow contract holds its own funds and wants to authorize a
+    ///         spender without round-tripping through cofhejs.
+    function approve(address spender, euint64 amount) external returns (euint64) {
+        _approve(msg.sender, spender, amount);
+        return amount;
+    }
+
+    function _approve(address owner, address spender, euint64 amount) internal {
+        _allowances[owner][spender] = amount;
+        FHE.allowThis(amount);
+        FHE.allow(amount, owner);
+        FHE.allow(amount, spender);
+        emit Approval(owner, spender);
     }
 
     /// @notice Spender pulls from `from`. Silently clamps to min(amount, allowance, balance).

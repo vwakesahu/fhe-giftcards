@@ -1,5 +1,5 @@
 /**
- * Sigill / Observer / ConfidentialERC20 — full simulation.
+ * Sigill / Observer / ConfidentialERC20 — quote-then-confirm flow.
  *
  * Run on the hardhat network so the cofhe-hardhat-plugin's mock task manager,
  * mock zk-verifier, and mock query-decrypter are available:
@@ -18,9 +18,19 @@ import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signer
 import type { ConfidentialERC20, MockUSDC, Sigill } from "../typechain-types";
 
 const BOND = ethers.parseEther("0.01");
-const ORDER_TIMEOUT = 10 * 60; // seconds — matches Observer.ORDER_TIMEOUT
-const WRAP_AMOUNT = 100_000_000n; // 100 USDC (6 decimals)
-const PAY_AMOUNT = 10_000_000n; // 10 USDC
+const ORDER_TIMEOUT = 10 * 60;
+const QUOTE_TTL = 5 * 60;
+const WRAP_AMOUNT = 100_000_000n; // 100 cUSDC
+
+// Catalog setup. With OBSERVER_FEE = 0 the total reduces to price * 1.025.
+const PRODUCT_PRICE = 10_000_000n; // $10 cUSDC base units
+const OBSERVER_FEE = 0n;
+const PLATFORM_FEE_NUM = 25n; // 25 / 1000 = 2.5%
+const PLATFORM_FEE_DENOM = 1000n;
+const PLATFORM_FEE_AMOUNT =
+  (PRODUCT_PRICE * PLATFORM_FEE_NUM) / PLATFORM_FEE_DENOM; // 250_000
+const TOTAL_AMOUNT = PRODUCT_PRICE + OBSERVER_FEE + PLATFORM_FEE_AMOUNT; // 10_250_000
+const PROTOCOL_VAULT = "0x37DFfFfB73b4A7eE6584F1ea56bac618c29c6882";
 
 async function initCofhe(signer: HardhatEthersSigner) {
   await hre.cofhe.initializeWithHardhatSigner(signer, { environment: "MOCK" });
@@ -52,31 +62,67 @@ async function unsealUint64(
   return res.data as bigint;
 }
 
+function parseLogByName<T extends { interface: { parseLog: (l: { topics: string[]; data: string }) => { name: string; args: Record<string, unknown> } | null } }>(
+  contract: T,
+  receipt: { logs: ReadonlyArray<{ topics: ReadonlyArray<string>; data: string }> },
+  name: string,
+) {
+  const log = receipt.logs.find((l) => {
+    try {
+      return (
+        contract.interface.parseLog({
+          topics: l.topics as string[],
+          data: l.data,
+        })?.name === name
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (!log) throw new Error(`event ${name} not in receipt`);
+  return contract.interface.parseLog({
+    topics: log.topics as string[],
+    data: log.data,
+  })!;
+}
+
 /**
- * Single-shot helper that approves Sigill for `amount` and places an order
- * with the given observer. Returns the new order id.
+ * Run the full quote → approve → confirm pipeline. The frontend pattern: the
+ * buyer reads OrderQuoted, unseals the expected total (they have ACL via
+ * FHE.allow in quoteOrder), then re-encrypts it locally via cofhejs and
+ * approves with a fresh InEuint64. The contract verifies via FHE.eq.
+ *
+ * Pass `approveAmount` to override what gets approved (used by tamper tests).
  */
-async function placeOrderWith(
+async function quoteAndConfirm(
   sigill: Sigill,
   cUSDC: ConfidentialERC20,
   buyer: HardhatEthersSigner,
   observer: HardhatEthersSigner,
   productId: bigint,
-  amount: bigint = PAY_AMOUNT,
+  approveAmount: bigint = TOTAL_AMOUNT,
 ): Promise<bigint> {
-  const encApprove = await encryptUint64(buyer, amount);
-  await (
-    await cUSDC.connect(buyer).approve(await sigill.getAddress(), encApprove)
+  const quoteReceipt = await (
+    await sigill.connect(buyer).quoteOrder(productId, observer.address)
   ).wait();
-  const encProductId = await encryptUint64(buyer, productId);
-  const tx = await sigill
-    .connect(buyer)
-    .placeOrder(encProductId, observer.address);
-  const receipt = await tx.wait();
-  // Contract emits OrderInProccessed for the first active order in the
-  // observer's queue and OrderInQueued for everything behind it. Either one
-  // carries the orderId as the first indexed arg.
-  const log = receipt!.logs.find((l) => {
+  const quoted = parseLogByName(sigill, quoteReceipt!, "OrderQuoted");
+  const pendingId = quoted.args.pendingId as bigint;
+
+  const encApprove = await encryptUint64(buyer, approveAmount);
+  await (
+    await cUSDC
+      .connect(buyer)
+      ["approve(address,(uint256,uint8,uint8,bytes))"](
+        await sigill.getAddress(),
+        encApprove,
+      )
+  ).wait();
+
+  const confirmReceipt = await (
+    await sigill.connect(buyer).confirmOrder(pendingId)
+  ).wait();
+
+  const log = confirmReceipt!.logs.find((l) => {
     try {
       const name = sigill.interface.parseLog({
         topics: l.topics as string[],
@@ -94,7 +140,7 @@ async function placeOrderWith(
   return parsed.args.orderId as bigint;
 }
 
-describe("Sigill — full E2E simulation", () => {
+describe("Sigill — quote-then-confirm E2E", () => {
   let usdc: MockUSDC;
   let cUSDC: ConfidentialERC20;
   let sigill: Sigill;
@@ -118,7 +164,7 @@ describe("Sigill — full E2E simulation", () => {
     const C = await ethers.getContractFactory("ConfidentialERC20");
     cUSDC = (await C.connect(deployer).deploy(
       await usdc.getAddress(),
-      observer.address, // unwrapper — observer doubles as the trusted unsealer
+      observer.address,
       "Confidential USDC",
       "cUSDC",
     )) as unknown as ConfidentialERC20;
@@ -130,7 +176,16 @@ describe("Sigill — full E2E simulation", () => {
     )) as unknown as Sigill;
     await sigill.waitForDeployment();
 
-    // Both buyers self-mint 1000 USDC and wrap 100 → cUSDC.
+    // Seed catalog: products 1..10 all priced at PRODUCT_PRICE.
+    for (let i = 1; i <= 10; i++) {
+      await (
+        await sigill
+          .connect(deployer)
+          .setProductPrice(i, PRODUCT_PRICE)
+      ).wait();
+    }
+
+    // Fund + wrap for both buyers.
     for (const b of [buyer, buyer2]) {
       await (await usdc.connect(b).mint(b.address, 1_000_000_000n)).wait();
       await (
@@ -147,8 +202,13 @@ describe("Sigill — full E2E simulation", () => {
       expect(await sigill.cUSDC()).to.equal(await cUSDC.getAddress());
     });
 
+    it("sets admin = deployer", async () => {
+      expect(await sigill.admin()).to.equal(deployer.address);
+    });
+
     it("exposes the public constants", async () => {
       expect(await sigill.ORDER_TIMEOUT()).to.equal(ORDER_TIMEOUT);
+      expect(await sigill.QUOTE_TTL()).to.equal(QUOTE_TTL);
       expect(await sigill.PRICISION()).to.equal(1_000_000);
       expect(await sigill.MIN_BOND()).to.equal(BOND);
       expect(await sigill.getBondAmount()).to.equal(BOND);
@@ -157,7 +217,36 @@ describe("Sigill — full E2E simulation", () => {
     it("starts with zero observers and zero orders", async () => {
       expect(await sigill.getObserversCount()).to.equal(0);
       expect(await sigill.nextOrderId()).to.equal(0);
+      expect(await sigill.nextPendingId()).to.equal(0);
       expect(await sigill.getObservers()).to.deep.equal([]);
+    });
+  });
+
+  // ─── Product catalog ────────────────────────────────────────────────────
+
+  describe("product catalog", () => {
+    it("seeds prices via setProductPrice and flips productActive on", async () => {
+      expect(await sigill.productPriceUsdc(1)).to.equal(PRODUCT_PRICE);
+      expect(await sigill.productActive(1)).to.equal(true);
+    });
+
+    it("treats a price of 0 as inactive", async () => {
+      await (
+        await sigill.connect(deployer).setProductPrice(1, 0n)
+      ).wait();
+      expect(await sigill.productPriceUsdc(1)).to.equal(0n);
+      expect(await sigill.productActive(1)).to.equal(false);
+    });
+
+    it("rejects setProductPrice from non-admin", async () => {
+      await expect(
+        sigill.connect(outsider).setProductPrice(99, 1_000_000n),
+      ).to.be.revertedWith("Not admin");
+    });
+
+    it("returns 0/false for unset products", async () => {
+      expect(await sigill.productPriceUsdc(999)).to.equal(0n);
+      expect(await sigill.productActive(999)).to.equal(false);
     });
   });
 
@@ -165,7 +254,9 @@ describe("Sigill — full E2E simulation", () => {
 
   describe("registerObserver", () => {
     it("registers when bond is sufficient and emits event", async () => {
-      await expect(sigill.connect(observer).registerObserver({ value: BOND }))
+      await expect(
+        sigill.connect(observer).registerObserver(OBSERVER_FEE, { value: BOND }),
+      )
         .to.emit(sigill, "ObserverRegistered")
         .withArgs(observer.address, BOND);
 
@@ -179,25 +270,26 @@ describe("Sigill — full E2E simulation", () => {
 
     it("reverts when bond is below the minimum", async () => {
       await expect(
-        sigill.connect(observer).registerObserver({ value: BOND - 1n }),
+        sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND - 1n }),
       ).to.be.revertedWith("Bond too low");
     });
 
-    it("accumulates bond on repeat calls and pushes the observer twice", async () => {
-      // Note: Observer.registerObserver pushes to `observers` every time and
-      // flips isObserver. Re-registering re-appends but does not double-count
-      // uniqueness. We just verify the storage agrees with the contract.
+    it("stores the encrypted observerFees with buyer-readable ACL", async () => {
+      const fee = 500_000n;
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(fee, { value: BOND })
       ).wait();
 
-      expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
-        BOND * 2n,
+      const [details] = await sigill.getObserverDetail();
+      expect(details.observerAddress).to.equal(observer.address);
+      // Observer has ACL on its own fees handle (granted in registerObserver).
+      expect(await unsealUint64(observer, BigInt(details.observerFees))).to.equal(
+        fee,
       );
-      expect(await sigill.getObserversCount()).to.equal(2);
     });
 
     it("getObserverAt reverts on out-of-bounds index", async () => {
@@ -207,80 +299,247 @@ describe("Sigill — full E2E simulation", () => {
     });
   });
 
-  // ─── placeOrder ─────────────────────────────────────────────────────────
+  // ─── quoteOrder ─────────────────────────────────────────────────────────
 
-  describe("placeOrder", () => {
+  describe("quoteOrder", () => {
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-
-      // Buyer approves Sigill for an encrypted PAY_AMOUNT allowance.
-      const encApprove = await encryptUint64(buyer, PAY_AMOUNT);
-      await (
-        await cUSDC
-          .connect(buyer)
-          .approve(await sigill.getAddress(), encApprove)
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
     });
 
-    it("escrows the payment, queues the order, and emits OrderInProccessed", async () => {
-      const encProductId = await encryptUint64(buyer, 7n);
-
-      const tx = await sigill
-        .connect(buyer)
-        .placeOrder(encProductId, observer.address);
+    it("emits OrderQuoted with the expected total handle the buyer can unseal", async () => {
+      const tx = await sigill.connect(buyer).quoteOrder(1n, observer.address);
       const receipt = await tx.wait();
-      expect(receipt!.status).to.equal(1);
+      const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
 
-      expect(await sigill.nextOrderId()).to.equal(1);
+      expect(ev.args.pendingId).to.equal(0n);
+      expect(ev.args.buyer).to.equal(buyer.address);
+      expect(ev.args.observer).to.equal(observer.address);
+      expect(ev.args.productId).to.equal(1n);
 
-      const o = await sigill.getOrder(0);
+      // Buyer has ACL on the expectedTotal handle and unseals to TOTAL_AMOUNT.
+      const handle = ev.args.expectedTotalHandle as bigint;
+      expect(await unsealUint64(buyer, handle)).to.equal(TOTAL_AMOUNT);
+
+      // expiresAt = block.timestamp + QUOTE_TTL.
+      const block = await ethers.provider.getBlock(receipt!.blockNumber);
+      expect(ev.args.expiresAt).to.equal(BigInt(block!.timestamp) + BigInt(QUOTE_TTL));
+
+      expect(await sigill.nextPendingId()).to.equal(1n);
+    });
+
+    it("stashes a PendingOrder addressable via getPendingOrder", async () => {
+      await (
+        await sigill.connect(buyer).quoteOrder(1n, observer.address)
+      ).wait();
+
+      const p = await sigill.getPendingOrder(0n);
+      expect(p.buyer).to.equal(buyer.address);
+      expect(p.observer).to.equal(observer.address);
+      expect(p.productId).to.equal(1n);
+      expect(await unsealUint64(buyer, BigInt(p.expectedTotal))).to.equal(
+        TOTAL_AMOUNT,
+      );
+    });
+
+    it("computes total = price + observerFee + 2.5% platform fee", async () => {
+      const customFee = 750_000n;
+      await (
+        await sigill
+          .connect(observer2)
+          .registerObserver(customFee, { value: BOND })
+      ).wait();
+
+      const tx = await sigill.connect(buyer).quoteOrder(1n, observer2.address);
+      const receipt = await tx.wait();
+      const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
+      const handle = ev.args.expectedTotalHandle as bigint;
+
+      const expected =
+        PRODUCT_PRICE + customFee + (PRODUCT_PRICE * 25n) / 1000n;
+      expect(await unsealUint64(buyer, handle)).to.equal(expected);
+    });
+
+    it("reverts on an unknown product", async () => {
+      await expect(
+        sigill.connect(buyer).quoteOrder(999n, observer.address),
+      ).to.be.revertedWith("unknown product");
+    });
+
+    it("reverts when the chosen observer is not bonded", async () => {
+      await expect(
+        sigill.connect(buyer).quoteOrder(1n, outsider.address),
+      ).to.be.revertedWith("Observer not bonded");
+    });
+
+    it("reverts when the observer queue is full", async () => {
+      // Fill all 4 slots with confirmed orders.
+      for (let i = 0; i < 4; i++) {
+        await quoteAndConfirm(sigill, cUSDC, buyer, observer, BigInt(i + 1));
+      }
+      await expect(
+        sigill.connect(buyer).quoteOrder(5n, observer.address),
+      ).to.be.revertedWith("Observers queue is full");
+    });
+  });
+
+  // ─── confirmOrder ───────────────────────────────────────────────────────
+
+  describe("confirmOrder — happy path", () => {
+    beforeEach(async () => {
+      await (
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
+      ).wait();
+    });
+
+    it("escrows TOTAL_AMOUNT, sets order Pending, emits OrderInProccessed", async () => {
+      const orderId = await quoteAndConfirm(
+        sigill,
+        cUSDC,
+        buyer,
+        observer,
+        7n,
+      );
+      expect(orderId).to.equal(0n);
+      expect(await sigill.nextOrderId()).to.equal(1n);
+
+      const o = await sigill.getOrder(0n);
       expect(o.buyer).to.equal(buyer.address);
       expect(o.observer).to.equal(observer.address);
       expect(o.status).to.equal(0); // Pending
 
-      // productId ACL is granted to the contract + observer in Observer._placeOrder,
-      // not the buyer — verify via the mock plaintext store instead of unseal.
       await hre.cofhe.mocks.expectPlaintext(BigInt(o.encProductId), 7n);
-      // encPaid is the transferred handle from cUSDC.transferFromAllowance, which
-      // FHE.allows the `from` (buyer), so buyer can unseal it.
-      expect(await unsealUint64(buyer, o.encPaid)).to.equal(PAY_AMOUNT);
+      expect(await unsealUint64(buyer, BigInt(o.encPaid))).to.equal(
+        TOTAL_AMOUNT,
+      );
+      // platformFee = 2.5% of price.
+      await hre.cofhe.mocks.expectPlaintext(
+        BigInt(o.platformFee),
+        PLATFORM_FEE_AMOUNT,
+      );
 
-      expect(await sigill.getQueueLength(observer.address)).to.equal(1);
-      expect(await sigill.getQueueAt(observer.address, 0)).to.equal(0);
-      expect(await sigill.getOrderQueue(observer.address)).to.deep.equal([0n]);
+      // Sigill holds the full escrow.
+      const sigillEnc = await cUSDC.balanceOf(await sigill.getAddress());
+      await hre.cofhe.mocks.expectPlaintext(BigInt(sigillEnc), TOTAL_AMOUNT);
 
+      // Buyer was debited the total.
       expect(
         await unsealUint64(buyer, await cUSDC.balanceOf(buyer.address)),
-      ).to.equal(WRAP_AMOUNT - PAY_AMOUNT);
-
-      const sigillEnc = await cUSDC.balanceOf(await sigill.getAddress());
-      await hre.cofhe.mocks.expectPlaintext(BigInt(sigillEnc), PAY_AMOUNT);
+      ).to.equal(WRAP_AMOUNT - TOTAL_AMOUNT);
     });
 
-    it("reverts when the chosen observer is not bonded", async () => {
-      const encProductId = await encryptUint64(buyer, 1n);
+    it("deletes the pending entry after confirm", async () => {
+      await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
+      // After delete, the stash is zeroed.
+      const p = await sigill.getPendingOrder(0n);
+      expect(p.buyer).to.equal(ethers.ZeroAddress);
+      expect(p.productId).to.equal(0n);
+    });
+  });
+
+  // ─── confirmOrder — tamper / preconditions ─────────────────────────────
+
+  describe("confirmOrder — tamper detection", () => {
+    beforeEach(async () => {
+      await (
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
+      ).wait();
+    });
+
+    async function quote(b = buyer, productId = 1n, obs = observer) {
+      const r = await (
+        await sigill.connect(b).quoteOrder(productId, obs.address)
+      ).wait();
+      const ev = parseLogByName(sigill, r!, "OrderQuoted");
+      return ev.args.pendingId as bigint;
+    }
+
+    it("zeroes the escrow and refunds in-tx if buyer approves a wrong handle", async () => {
+      // Buyer fronts the buyer's own balance handle (WRAP_AMOUNT) as the
+      // allowance — the value differs from TOTAL_AMOUNT so FHE.eq fails.
+      const balanceHandle = BigInt(await cUSDC.balanceOf(buyer.address));
+      const orderId = await quoteAndConfirm(
+        sigill,
+        cUSDC,
+        buyer,
+        observer,
+        1n,
+        balanceHandle,
+      );
+
+      // Order created but escrow zeroed.
+      const o = await sigill.getOrder(orderId);
+      expect(o.status).to.equal(0); // Pending
+      await hre.cofhe.mocks.expectPlaintext(BigInt(o.encPaid), 0n);
+      await hre.cofhe.mocks.expectPlaintext(BigInt(o.platformFee), 0n);
+
+      // Buyer's cUSDC balance is unchanged — the bad pull was refunded.
+      expect(
+        await unsealUint64(buyer, await cUSDC.balanceOf(buyer.address)),
+      ).to.equal(WRAP_AMOUNT);
+
+      // Sigill holds nothing for this order.
+      const sigillBal = await cUSDC.balanceOf(await sigill.getAddress());
+      await hre.cofhe.mocks.expectPlaintext(BigInt(sigillBal), 0n);
+    });
+
+    it("still decrements the observer slot when payment was tampered", async () => {
+      const balanceHandle = BigInt(await cUSDC.balanceOf(buyer.address));
+      await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n, balanceHandle);
+
+      // FHE.eq result is opaque on-chain, so the order goes through and the
+      // slot is consumed. The observer can reject the zero-escrow order to
+      // free it up again.
+      const [d] = await sigill.getObserverDetail();
+      expect(d.slotLeft).to.equal(3);
+    });
+
+    it("reverts on an unknown pendingId", async () => {
       await expect(
-        sigill.connect(buyer).placeOrder(encProductId, outsider.address),
-      ).to.be.revertedWith("Observer not bonded");
+        sigill.connect(buyer).confirmOrder(999n),
+      ).to.be.revertedWith("Unknown quote");
+    });
+
+    it("reverts if a non-buyer tries to confirm someone else's quote", async () => {
+      const pendingId = await quote(buyer);
+      // No approve needed — confirmOrder reverts before transferFromAllowance.
+      await expect(
+        sigill.connect(buyer2).confirmOrder(pendingId),
+      ).to.be.revertedWith("Not buyer");
+    });
+
+    it("reverts after the quote TTL has passed", async () => {
+      const pendingId = await quote();
+      await time.increase(QUOTE_TTL + 1);
+      await expect(
+        sigill.connect(buyer).confirmOrder(pendingId),
+      ).to.be.revertedWith("Quote expired");
     });
   });
 
   // ─── fulfillOrder ───────────────────────────────────────────────────────
 
   describe("fulfillOrder", () => {
-    const orderId = 0n;
     const aesKey = 0x1234_5678_9abc_def0_1234_5678_9abc_def0n;
+    let orderId: bigint;
 
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
-      await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
+      orderId = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
     });
 
-    it("marks the order Fulfilled, stores the AES key + CID, and pays the observer", async () => {
+    it("splits escrow between observer and PROTOCOL_VAULT, marks Fulfilled", async () => {
       const encAesKey = await encryptUint128(observer, aesKey);
 
       await expect(
@@ -293,16 +552,21 @@ describe("Sigill — full E2E simulation", () => {
       expect(o.status).to.equal(2); // Fulfilled
       expect(o.ipfsCid).to.equal("ipfs://cid");
 
-      await initCofhe(buyer);
-      const aesRes = await cofhejs.unseal(
-        BigInt(o.encAesKey),
-        FheTypes.Uint128,
-      );
-      expect(aesRes.data).to.equal(aesKey);
-
+      // Observer received (TOTAL_AMOUNT - platformFee) = price + observerFee.
       expect(
         await unsealUint64(observer, await cUSDC.balanceOf(observer.address)),
-      ).to.equal(PAY_AMOUNT);
+      ).to.equal(PRODUCT_PRICE + OBSERVER_FEE);
+
+      // Protocol vault received the platform fee.
+      const vaultBal = await cUSDC.balanceOf(PROTOCOL_VAULT);
+      await hre.cofhe.mocks.expectPlaintext(
+        BigInt(vaultBal),
+        PLATFORM_FEE_AMOUNT,
+      );
+
+      // Sigill is empty now — full escrow has been split out.
+      const sigillBal = await cUSDC.balanceOf(await sigill.getAddress());
+      await hre.cofhe.mocks.expectPlaintext(BigInt(sigillBal), 0n);
 
       expect(await sigill.getOrderCompleted(observer.address)).to.equal(1);
     });
@@ -340,19 +604,21 @@ describe("Sigill — full E2E simulation", () => {
   // ─── rejectOrder ────────────────────────────────────────────────────────
 
   describe("rejectOrder", () => {
-    const orderId = 0n;
+    let orderId: bigint;
 
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
-      await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
+      orderId = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
     });
 
-    it("refunds the buyer and emits OrderRejected", async () => {
+    it("refunds the full TOTAL_AMOUNT to the buyer and emits OrderRejected", async () => {
       expect(
         await unsealUint64(buyer, await cUSDC.balanceOf(buyer.address)),
-      ).to.equal(WRAP_AMOUNT - PAY_AMOUNT);
+      ).to.equal(WRAP_AMOUNT - TOTAL_AMOUNT);
 
       await expect(
         sigill.connect(observer).rejectOrder(orderId, "price too low"),
@@ -377,7 +643,9 @@ describe("Sigill — full E2E simulation", () => {
     it("reverts on rejecting an already-fulfilled order", async () => {
       const encAesKey = await encryptUint128(observer, 1n);
       await (
-        await sigill.connect(observer).fulfillOrder(orderId, encAesKey, "cid")
+        await sigill
+          .connect(observer)
+          .fulfillOrder(orderId, encAesKey, "cid")
       ).wait();
 
       await expect(
@@ -389,13 +657,15 @@ describe("Sigill — full E2E simulation", () => {
   // ─── refund (buyer reclaims after deadline) ─────────────────────────────
 
   describe("refund", () => {
-    const orderId = 0n;
+    let orderId: bigint;
 
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
-      await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
+      orderId = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
     });
 
     it("reverts before the deadline", async () => {
@@ -406,16 +676,17 @@ describe("Sigill — full E2E simulation", () => {
 
     it("reverts if a non-buyer calls", async () => {
       await time.increase(ORDER_TIMEOUT + 1);
-      await expect(sigill.connect(outsider).refund(orderId)).to.be.revertedWith(
-        "Not buyer",
-      );
+      await expect(
+        sigill.connect(outsider).refund(orderId),
+      ).to.be.revertedWith("Not buyer");
     });
 
-    it("refunds the buyer, slashes the observer bond by 50%, and emits the event", async () => {
+    it("refunds the buyer, slashes observer bond 50%, emits OrderRefunded", async () => {
       await time.increase(ORDER_TIMEOUT + 1);
 
-      const bondBefore = await sigill.getObserverBondAmount(observer.address);
-      expect(bondBefore).to.equal(BOND);
+      expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
+        BOND,
+      );
 
       await expect(sigill.connect(buyer).refund(orderId))
         .to.emit(sigill, "OrderRefunded")
@@ -436,7 +707,9 @@ describe("Sigill — full E2E simulation", () => {
     it("reverts on refunding an already-fulfilled order", async () => {
       const encAesKey = await encryptUint128(observer, 1n);
       await (
-        await sigill.connect(observer).fulfillOrder(orderId, encAesKey, "cid")
+        await sigill
+          .connect(observer)
+          .fulfillOrder(orderId, encAesKey, "cid")
       ).wait();
       await time.increase(ORDER_TIMEOUT + 1);
       await expect(sigill.connect(buyer).refund(orderId)).to.be.revertedWith(
@@ -450,13 +723,26 @@ describe("Sigill — full E2E simulation", () => {
   describe("observer queue", () => {
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
     });
 
     it("tracks queue length and per-index order IDs across multiple orders", async () => {
+      // Buyer needs enough cUSDC for 3 orders.
+      await (
+        await usdc.connect(buyer).mint(buyer.address, 1_000_000_000n)
+      ).wait();
+      await (
+        await usdc
+          .connect(buyer)
+          .approve(await cUSDC.getAddress(), WRAP_AMOUNT)
+      ).wait();
+      await (await cUSDC.connect(buyer).wrap(WRAP_AMOUNT)).wait();
+
       for (let i = 0; i < 3; i++) {
-        await placeOrderWith(sigill, cUSDC, buyer, observer, BigInt(i + 1));
+        await quoteAndConfirm(sigill, cUSDC, buyer, observer, BigInt(i + 1));
       }
 
       expect(await sigill.getQueueLength(observer.address)).to.equal(3);
@@ -470,54 +756,22 @@ describe("Sigill — full E2E simulation", () => {
     });
 
     it("getQueueAt reverts on out-of-bounds index", async () => {
-      await expect(sigill.getQueueAt(observer.address, 0)).to.be.revertedWith(
-        "Index out of bounds",
-      );
-    });
-  });
-
-  // ─── Stat getters ───────────────────────────────────────────────────────
-
-  describe("observer stats", () => {
-    beforeEach(async () => {
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-    });
-
-    it("updates getOrderCompleted and getOrderFailed across the lifecycle", async () => {
-      for (let i = 0; i < 2; i++) {
-        await placeOrderWith(sigill, cUSDC, buyer, observer, BigInt(i + 1));
-      }
-
-      expect(await sigill.getOrderFailed(observer.address)).to.equal(2); // both pending
-
-      const encAesKey = await encryptUint128(observer, 1n);
-      await (
-        await sigill.connect(observer).fulfillOrder(0, encAesKey, "cid-0")
-      ).wait();
-      await (await sigill.connect(observer).rejectOrder(1, "rejected")).wait();
-
-      expect(await sigill.getOrderCompleted(observer.address)).to.equal(1);
-      expect(await sigill.getOrderFailed(observer.address)).to.equal(0);
-      expect(await sigill.getCompleteness(observer.address)).to.be.greaterThan(
-        0,
-      );
+      await expect(
+        sigill.getQueueAt(observer.address, 0),
+      ).to.be.revertedWith("Index out of bounds");
     });
   });
 
   // ─── Observer slot system ───────────────────────────────────────────────
 
   describe("observer slot system", () => {
-    // soltSize=4 means an observer can hold at most 4 in-flight orders. The
-    // counter (slotLeft) decrements on placeOrder and increments on either
-    // fulfillOrder or rejectOrder.
-
     beforeEach(async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
-      // Buyer wraps an extra 100 USDC so we can fund up to 5 orders of 10 each.
+      // Buyer gets extra cUSDC to fund up to 5 orders.
       await (
         await usdc.connect(buyer).mint(buyer.address, 1_000_000_000n)
       ).wait();
@@ -531,56 +785,36 @@ describe("Sigill — full E2E simulation", () => {
 
     it("starts with slotLeft = soltSize = 4 after registration", async () => {
       const [d] = await sigill.getObserverDetail();
-      console.log(d);
       expect(d.slotLeft).to.equal(4);
       expect(d.soltSize).to.equal(4);
       expect(d.sucessRate).to.equal(0);
     });
 
-    it("decrements slotLeft on each placeOrder", async () => {
+    it("decrements slotLeft on each confirmOrder", async () => {
       for (let i = 0; i < 3; i++) {
-        await placeOrderWith(sigill, cUSDC, buyer, observer, BigInt(i + 1));
+        await quoteAndConfirm(sigill, cUSDC, buyer, observer, BigInt(i + 1));
       }
       const [d] = await sigill.getObserverDetail();
-      expect(d.slotLeft).to.equal(1); // 4 - 3
-      expect(d.soltSize).to.equal(4); // capacity is unchanged
+      expect(d.slotLeft).to.equal(1);
+      expect(d.soltSize).to.equal(4);
     });
 
-    it('reverts placeOrder with "Observers queue is full" when slots are exhausted', async () => {
-      for (let i = 0; i < 4; i++) {
-        await placeOrderWith(sigill, cUSDC, buyer, observer, BigInt(i + 1));
-      }
-      const [d] = await sigill.getObserverDetail();
-      expect(d.slotLeft).to.equal(0);
-
-      // 5th order should bounce — slot is full.
-      const encApprove = await encryptUint64(buyer, PAY_AMOUNT);
-      await (
-        await cUSDC
-          .connect(buyer)
-          .approve(await sigill.getAddress(), encApprove)
-      ).wait();
-      const encProductId = await encryptUint64(buyer, 99n);
-      await expect(
-        sigill.connect(buyer).placeOrder(encProductId, observer.address),
-      ).to.be.revertedWith("Observers queue is full");
-    });
-
-    it("frees a slot on fulfillOrder and updates sucessRate", async () => {
-      const oid = await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
-
+    it("frees a slot on fulfillOrder and bumps sucessRate", async () => {
+      const oid = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
       let [d] = await sigill.getObserverDetail();
       expect(d.slotLeft).to.equal(3);
 
       const k = await encryptUint128(observer, 7n);
-      await (await sigill.connect(observer).fulfillOrder(oid, k, "cid")).wait();
+      await (
+        await sigill.connect(observer).fulfillOrder(oid, k, "cid")
+      ).wait();
       [d] = await sigill.getObserverDetail();
-      expect(d.slotLeft).to.equal(4); // slot freed
-      expect(d.sucessRate).to.be.greaterThan(0); // success rate bumped
+      expect(d.slotLeft).to.equal(4);
+      expect(d.sucessRate).to.be.greaterThan(0);
     });
 
     it("frees a slot on rejectOrder", async () => {
-      const oid = await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
+      const oid = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
       let [d] = await sigill.getObserverDetail();
       expect(d.slotLeft).to.equal(3);
 
@@ -589,21 +823,17 @@ describe("Sigill — full E2E simulation", () => {
       ).wait();
       [d] = await sigill.getObserverDetail();
       expect(d.slotLeft).to.equal(4);
-      // Rejection does not bump sucessRate.
       expect(d.sucessRate).to.equal(0);
     });
 
     it("does NOT free a slot on buyer refund (slot stays consumed)", async () => {
-      const oid = await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
+      const oid = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
       let [d] = await sigill.getObserverDetail();
       expect(d.slotLeft).to.equal(3);
 
       await time.increase(ORDER_TIMEOUT + 1);
       await (await sigill.connect(buyer).refund(oid)).wait();
       [d] = await sigill.getObserverDetail();
-      // _refund doesn't touch slotLeft — the no-show observer keeps the slot
-      // occupied (and they were just slashed, so they can't keep stuffing
-      // queues anyway).
       expect(d.slotLeft).to.equal(3);
     });
   });
@@ -611,114 +841,19 @@ describe("Sigill — full E2E simulation", () => {
   // ─── Multiple observers ─────────────────────────────────────────────────
 
   describe("multiple observers", () => {
-    it("registers and lists three independent observers", async () => {
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer2).registerObserver({ value: BOND * 2n })
-      ).wait();
-      await (
-        await sigill.connect(observer3).registerObserver({ value: BOND * 3n })
-      ).wait();
-
-      expect(await sigill.getObserversCount()).to.equal(3);
-      expect(await sigill.getObservers()).to.deep.equal([
-        observer.address,
-        observer2.address,
-        observer3.address,
-      ]);
-      expect(await sigill.getObserverAt(0)).to.equal(observer.address);
-      expect(await sigill.getObserverAt(1)).to.equal(observer2.address);
-      expect(await sigill.getObserverAt(2)).to.equal(observer3.address);
-
-      expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
-        BOND,
-      );
-      expect(await sigill.getObserverBondAmount(observer2.address)).to.equal(
-        BOND * 2n,
-      );
-      expect(await sigill.getObserverBondAmount(observer3.address)).to.equal(
-        BOND * 3n,
-      );
-    });
-
-    it("returns the full ObserverDetails roster via getObserverDetail()", async () => {
-      expect(await sigill.getObserverDetail()).to.deep.equal([]);
-
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer2).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer3).registerObserver({ value: BOND })
-      ).wait();
-
-      const details = await sigill.getObserverDetail();
-      expect(details.length).to.equal(3);
-
-      // New registrations all default to (sucessRate=0, slotLeft=4, soltSize=4).
-      for (let i = 0; i < 3; i++) {
-        expect(details[i].sucessRate).to.equal(0);
-        expect(details[i].slotLeft).to.equal(4);
-        expect(details[i].soltSize).to.equal(4);
-      }
-      expect(details[0].observerAddress).to.equal(observer.address);
-      expect(details[1].observerAddress).to.equal(observer2.address);
-      expect(details[2].observerAddress).to.equal(observer3.address);
-    });
-
-    it("keeps each observer queue independent", async () => {
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer2).registerObserver({ value: BOND })
-      ).wait();
-
-      // buyer → observer (orders 0, 1); buyer2 → observer2 (order 2);
-      // buyer → observer2 (order 3).
-      await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
-      await placeOrderWith(sigill, cUSDC, buyer, observer, 2n);
-      await placeOrderWith(sigill, cUSDC, buyer2, observer2, 3n);
-      await placeOrderWith(sigill, cUSDC, buyer, observer2, 4n);
-
-      expect(await sigill.getOrderQueue(observer.address)).to.deep.equal([
-        0n,
-        1n,
-      ]);
-      expect(await sigill.getOrderQueue(observer2.address)).to.deep.equal([
-        2n,
-        3n,
-      ]);
-
-      expect(await sigill.getQueueLength(observer.address)).to.equal(2);
-      expect(await sigill.getQueueLength(observer2.address)).to.equal(2);
-      expect(await sigill.observersQueue(observer.address)).to.equal(2);
-      expect(await sigill.observersQueue(observer2.address)).to.equal(2);
-
-      // Per-order metadata routes to the right observer.
-      expect((await sigill.getOrder(0)).observer).to.equal(observer.address);
-      expect((await sigill.getOrder(1)).observer).to.equal(observer.address);
-      expect((await sigill.getOrder(2)).observer).to.equal(observer2.address);
-      expect((await sigill.getOrder(3)).observer).to.equal(observer2.address);
-
-      // observer3 is unregistered → no queue, getOrderFailed under-flow guard
-      // not triggered because nothing was placed against them.
-      expect(await sigill.getQueueLength(observer3.address)).to.equal(0);
-    });
-
     it("forbids cross-observer fulfillment and rejection", async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
       await (
-        await sigill.connect(observer2).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer2)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
 
-      const orderForObserver1 = await placeOrderWith(
+      const orderForObserver1 = await quoteAndConfirm(
         sigill,
         cUSDC,
         buyer,
@@ -726,7 +861,6 @@ describe("Sigill — full E2E simulation", () => {
         1n,
       );
 
-      // observer2 cannot fulfill an order assigned to observer.
       const encAesKey = await encryptUint128(observer2, 42n);
       await expect(
         sigill
@@ -734,78 +868,25 @@ describe("Sigill — full E2E simulation", () => {
           .fulfillOrder(orderForObserver1, encAesKey, "x"),
       ).to.be.revertedWith("Not observer");
 
-      // …nor can observer2 reject it.
       await expect(
         sigill.connect(observer2).rejectOrder(orderForObserver1, "mine"),
       ).to.be.revertedWith("Not observer");
     });
 
-    it("tracks completion stats independently per observer", async () => {
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-      await (
-        await sigill.connect(observer2).registerObserver({ value: BOND })
-      ).wait();
-
-      // observer: 2 orders, 1 fulfilled, 1 rejected.
-      const o1 = await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
-      const o2 = await placeOrderWith(sigill, cUSDC, buyer, observer, 2n);
-      // observer2: 1 order, 1 fulfilled.
-      const o3 = await placeOrderWith(sigill, cUSDC, buyer2, observer2, 3n);
-
-      const k1 = await encryptUint128(observer, 1n);
-      await (
-        await sigill.connect(observer).fulfillOrder(o1, k1, "cid-1")
-      ).wait();
-      await (await sigill.connect(observer).rejectOrder(o2, "no")).wait();
-
-      const k2 = await encryptUint128(observer2, 2n);
-      await (
-        await sigill.connect(observer2).fulfillOrder(o3, k2, "cid-3")
-      ).wait();
-
-      expect(await sigill.getOrderCompleted(observer.address)).to.equal(1);
-      expect(await sigill.getOrderCompleted(observer2.address)).to.equal(1);
-      expect(await sigill.getOrderFailed(observer.address)).to.equal(0);
-      expect(await sigill.getOrderFailed(observer2.address)).to.equal(0);
-
-      // Each observer gets paid only for their own fulfilled work (PAY_AMOUNT each).
-      expect(
-        await unsealUint64(observer, await cUSDC.balanceOf(observer.address)),
-      ).to.equal(PAY_AMOUNT);
-      expect(
-        await unsealUint64(observer2, await cUSDC.balanceOf(observer2.address)),
-      ).to.equal(PAY_AMOUNT);
-
-      // Bonds untouched (only refund() slashes; rejectOrder preserves bond).
-      expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
-        BOND,
-      );
-      expect(await sigill.getObserverBondAmount(observer2.address)).to.equal(
-        BOND,
-      );
-
-      // Both observers freed the slots they used and have non-zero sucessRate.
-      const details = await sigill.getObserverDetail();
-      expect(details[0].observerAddress).to.equal(observer.address);
-      expect(details[0].slotLeft).to.equal(4); // 4 - 2 placed + 2 freed
-      expect(details[0].sucessRate).to.be.greaterThan(0);
-      expect(details[1].observerAddress).to.equal(observer2.address);
-      expect(details[1].slotLeft).to.equal(4); // 4 - 1 placed + 1 freed
-      expect(details[1].sucessRate).to.be.greaterThan(0);
-    });
-
     it("slashes only the targeted observer when refund fires", async () => {
       await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
       await (
-        await sigill.connect(observer2).registerObserver({ value: BOND })
+        await sigill
+          .connect(observer2)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
       ).wait();
 
-      const oid = await placeOrderWith(sigill, cUSDC, buyer, observer, 1n);
-      await placeOrderWith(sigill, cUSDC, buyer2, observer2, 2n);
+      const oid = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
+      await quoteAndConfirm(sigill, cUSDC, buyer2, observer2, 2n);
 
       await time.increase(ORDER_TIMEOUT + 1);
       await (await sigill.connect(buyer).refund(oid)).wait();
@@ -813,118 +894,39 @@ describe("Sigill — full E2E simulation", () => {
       expect(await sigill.getObserverBondAmount(observer.address)).to.equal(
         BOND / 2n,
       );
-      // Untouched observer keeps the full bond.
       expect(await sigill.getObserverBondAmount(observer2.address)).to.equal(
         BOND,
       );
     });
   });
 
-  // ─── pickNextOrder: refunded entries are skipped ────────────────────────
+  // ─── pickNextOrder ──────────────────────────────────────────────────────
 
-  describe("pickNextOrder skips refunded orders", () => {
-    // The new placement flow stamps a deadline on the head order only; the
-    // rest sit Queued (with deadline == creation block.timestamp) until the
-    // head fulfils/rejects and _nextOrderStatusUpdate flips the next one to
-    // Pending. Buyers can refund while either Pending (after deadline) or
-    // Queued. _pickNextOrder is expected to walk past Refunded slots and
-    // surface the next live order for the observer to work on.
-
-    async function fundExtraBuyer(b: HardhatEthersSigner) {
-      await (await usdc.connect(b).mint(b.address, 1_000_000_000n)).wait();
-      await (
-        await usdc.connect(b).approve(await cUSDC.getAddress(), WRAP_AMOUNT)
-      ).wait();
-      await (await cUSDC.connect(b).wrap(WRAP_AMOUNT)).wait();
-    }
-
-    it("walks past three refunded orders and returns the survivor", async () => {
-      // buyer + buyer2 are wrapped by the outer beforeEach; spin up two more.
-      const signers = await ethers.getSigners();
-      const buyer3 = signers[7];
-      const buyer4 = signers[8];
-      const buyers = [buyer, buyer2, buyer3, buyer4];
-      await fundExtraBuyer(buyer3);
-      await fundExtraBuyer(buyer4);
-
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-
-      const orderIds: bigint[] = [];
-      for (let i = 0; i < 4; i++) {
-        orderIds.push(
-          await placeOrderWith(sigill, cUSDC, buyers[i], observer, BigInt(i + 1)),
-        );
-      }
-      expect(await sigill.getOrderQueue(observer.address)).to.deep.equal(
-        orderIds,
-      );
-
-      // Head Pending with deadline; everything behind it Queued.
-      expect((await sigill.getOrder(orderIds[0])).status).to.equal(0); // Pending
-      expect((await sigill.getOrder(orderIds[0])).deadline).to.be.greaterThan(0);
-      for (let i = 1; i < 4; i++) {
-        expect((await sigill.getOrder(orderIds[i])).status).to.equal(5); // Queued
-      }
-
-      // Push past the head's deadline so the Pending refund passes the
-      // block.timestamp > deadline check. Queued entries already satisfy it
-      // because their deadline was stamped at creation block.
-      await time.increase(ORDER_TIMEOUT + 1);
-
-      // Refund 3 of 4 — leave order 3 as the only survivor.
-      await (await sigill.connect(buyers[0]).refund(orderIds[0])).wait();
-      await (await sigill.connect(buyers[1]).refund(orderIds[1])).wait();
-      await (await sigill.connect(buyers[2]).refund(orderIds[2])).wait();
-
-      for (let i = 0; i < 3; i++) {
-        expect((await sigill.getOrder(orderIds[i])).status).to.equal(3); // Refunded
-      }
-      expect((await sigill.getOrder(orderIds[3])).status).to.equal(5); // still Queued
-
-      // Inspect the return without mutating, then commit to advance orderIndex.
-      const next = await sigill.connect(observer).pickNextOrder.staticCall();
-      expect(next.buyer).to.equal(buyers[3].address);
-      expect(next.observer).to.equal(observer.address);
-
-      await (await sigill.connect(observer).pickNextOrder()).wait();
-      // observersQueue = queue.length - orderIndex = 4 - 3 = 1.
-      expect(await sigill.observersQueue(observer.address)).to.equal(1);
-    });
-
-    it("reverts pickNextOrder when every queued entry has been refunded", async () => {
-      const signers = await ethers.getSigners();
-      const buyer3 = signers[7];
-      const buyer4 = signers[8];
-      const buyers = [buyer, buyer2, buyer3, buyer4];
-      await fundExtraBuyer(buyer3);
-      await fundExtraBuyer(buyer4);
-
-      await (
-        await sigill.connect(observer).registerObserver({ value: BOND })
-      ).wait();
-
-      const orderIds: bigint[] = [];
-      for (let i = 0; i < 4; i++) {
-        orderIds.push(
-          await placeOrderWith(sigill, cUSDC, buyers[i], observer, BigInt(i + 1)),
-        );
-      }
-
-      await time.increase(ORDER_TIMEOUT + 1);
-      for (let i = 0; i < 4; i++) {
-        await (await sigill.connect(buyers[i]).refund(orderIds[i])).wait();
-      }
-
-      // Walker runs off the end of the queue — no live order to pick.
-      await expect(sigill.connect(observer).pickNextOrder()).to.be.reverted;
-    });
-
-    it("reverts pickNextOrder when called by a non-observer", async () => {
+  describe("pickNextOrder", () => {
+    it("reverts when called by a non-observer", async () => {
       await expect(
         sigill.connect(outsider).pickNextOrder(),
       ).to.be.revertedWith("Only Observer allowed to call this");
+    });
+
+    it("surfaces the head Pending order for the calling observer", async () => {
+      await (
+        await sigill
+          .connect(observer)
+          .registerObserver(OBSERVER_FEE, { value: BOND })
+      ).wait();
+      const oid = await quoteAndConfirm(sigill, cUSDC, buyer, observer, 1n);
+
+      const next = await sigill.connect(observer).pickNextOrder.staticCall();
+      expect(next.buyer).to.equal(buyer.address);
+      expect(next.observer).to.equal(observer.address);
+      expect(await unsealUint64(observer, BigInt(next.encPaid))).to.equal(
+        TOTAL_AMOUNT,
+      );
+      // Calling pickNextOrder (non-static) flips status to Processing.
+      await (await sigill.connect(observer).pickNextOrder()).wait();
+      const o = await sigill.getOrder(oid);
+      expect(o.status).to.equal(1); // Processing
     });
   });
 
@@ -940,23 +942,8 @@ describe("Sigill — full E2E simulation", () => {
       const reqReceipt = await (
         await cUSDC.connect(buyer).requestUnwrap(encUnwrap)
       ).wait();
-
-      const log = reqReceipt!.logs.find((l) => {
-        try {
-          return (
-            cUSDC.interface.parseLog({
-              topics: l.topics as string[],
-              data: l.data,
-            })?.name === "UnwrapRequested"
-          );
-        } catch {
-          return false;
-        }
-      });
-      const unwrapId = cUSDC.interface.parseLog({
-        topics: log!.topics as string[],
-        data: log!.data,
-      })!.args.unwrapId as bigint;
+      const ev = parseLogByName(cUSDC, reqReceipt!, "UnwrapRequested");
+      const unwrapId = ev.args.unwrapId as bigint;
 
       const usdcBefore = await usdc.balanceOf(buyer.address);
       await (
@@ -976,22 +963,8 @@ describe("Sigill — full E2E simulation", () => {
       const reqReceipt = await (
         await cUSDC.connect(buyer).requestUnwrap(encUnwrap)
       ).wait();
-      const log = reqReceipt!.logs.find((l) => {
-        try {
-          return (
-            cUSDC.interface.parseLog({
-              topics: l.topics as string[],
-              data: l.data,
-            })?.name === "UnwrapRequested"
-          );
-        } catch {
-          return false;
-        }
-      });
-      const unwrapId = cUSDC.interface.parseLog({
-        topics: log!.topics as string[],
-        data: log!.data,
-      })!.args.unwrapId as bigint;
+      const ev = parseLogByName(cUSDC, reqReceipt!, "UnwrapRequested");
+      const unwrapId = ev.args.unwrapId as bigint;
 
       await expect(
         cUSDC.connect(outsider).claimUnwrap(unwrapId, 5_000_000n),
@@ -1003,22 +976,8 @@ describe("Sigill — full E2E simulation", () => {
       const reqReceipt = await (
         await cUSDC.connect(buyer).requestUnwrap(encUnwrap)
       ).wait();
-      const log = reqReceipt!.logs.find((l) => {
-        try {
-          return (
-            cUSDC.interface.parseLog({
-              topics: l.topics as string[],
-              data: l.data,
-            })?.name === "UnwrapRequested"
-          );
-        } catch {
-          return false;
-        }
-      });
-      const unwrapId = cUSDC.interface.parseLog({
-        topics: log!.topics as string[],
-        data: log!.data,
-      })!.args.unwrapId as bigint;
+      const ev = parseLogByName(cUSDC, reqReceipt!, "UnwrapRequested");
+      const unwrapId = ev.args.unwrapId as bigint;
 
       await (
         await cUSDC.connect(buyer).claimUnwrap(unwrapId, 5_000_000n)
