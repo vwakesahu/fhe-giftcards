@@ -2,13 +2,13 @@
 
 Private checkout using FHE on Base Sepolia. You buy a gift card, and nobody on-chain can see what you bought, how much you paid, or the code you got back.
 
-Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o).
+Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o), **Wave 4** _TBD_.
 
 **Deployed on Base Sepolia**
 
-- Sigill: [`0x23A0…0324`](https://sepolia.basescan.org/address/0x23A0EB16E5bb10c46D9653B5D6688cE965e30324)
-- cUSDC (ConfidentialERC20): [`0xaFA9…3A2E`](https://sepolia.basescan.org/address/0xaFA944F1B5f929693f92Ee4445B441FA70953A2E)
-- USDC (Circle): [`0xE29D…424F`](https://sepolia.basescan.org/address/0xE29D70400026d77a790a8E483168B94D6E36424F)
+- Sigill: [`0x0dED…8470`](https://sepolia.basescan.org/address/0x0dED2B81A0463e6af64110d637CADda4545D8470)
+- cUSDC (ConfidentialERC20): [`0x93Db…0E06`](https://sepolia.basescan.org/address/0x93Db1E63315463bA6A25918820959d1086c50E06)
+- USDC (Mock on Base Sepolia): [`0xe29D…424F`](https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f)
 
 <p>
   Powered by
@@ -36,11 +36,12 @@ Your browser seals the inputs with FHE. You wrap some USDC into a confidential t
 
 **The flow**
 
-1. Buyer wraps USDC into cUSDC (a confidential ERC-20) and `approve`s Sigill for an encrypted allowance.
-2. Buyer calls `placeOrder(encProductId, observer)`. Sigill consumes the allowance as encrypted escrow. The actual amount never appears in plaintext on-chain.
-3. A bonded observer has FHE decryption permission on just the product ID and the paid amount. They confirm the payment covers the price, then buy the card from Reloadly.
-4. Observer AES-encrypts the code, pins the ciphertext to IPFS, and FHE-wraps the AES key so only the buyer can open it. The escrowed cUSDC is released to the observer in the same tx.
-5. Buyer unseals the AES key through FHE, fetches the ciphertext from IPFS, AES-decrypts, reads the code locally. Observer later `unwrap`s their cUSDC back to plain USDC whenever they want.
+1. Buyer wraps USDC into cUSDC (a confidential ERC-20).
+2. Buyer calls `quoteOrder(productId, observer, amountUsdc)`. The contract computes the encrypted total (`price + observerFee + 0.25% platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits the handle.
+3. Buyer unseals the quoted total locally, re-encrypts it as the cUSDC `approve` amount, and submits the approve.
+4. Buyer calls `confirmOrder(pendingId)`. Sigill pulls the allowance and FHE.eq-verifies it against the stored quote. Mismatch zeros the escrow and refunds in-place silently.
+5. The picked observer has FHE decryption permission on just the product ID and the paid amount. They confirm the payment covers the price, buy the card from Reloadly, AES-encrypt the code, pin the ciphertext to IPFS, and FHE-wrap the AES key so only the buyer can open it. The escrowed cUSDC splits at `fulfillOrder`: observer gets `encPaid - platformFee`, treasury gets `platformFee`, both encrypted transfers in the same tx.
+6. Buyer unseals the AES key through FHE, fetches the ciphertext from IPFS, AES-decrypts, reads the code locally. Observer later `unwrap`s their cUSDC back to plain USDC whenever they want.
 
 Explorer only ever sees opaque handles. IPFS only ever sees gibberish. The amount that moved between buyer and observer is an encrypted balance update, so nobody watching the chain can tell how much changed hands.
 
@@ -77,6 +78,7 @@ What you'll need to fill in:
 | " | `PINATA_JWT`, `PINATA_GATEWAY` | [pinata.cloud](https://pinata.cloud), API Keys |
 | " | `BASE_SEPOLIA_RPC_URL` | the public endpoint is flaky, prefer Alchemy or Infura or QuickNode |
 | `packages/app/.env.local` | `NEXT_PUBLIC_SIGILL_ADDRESS`, `NEXT_PUBLIC_CUSDC_ADDRESS`, `NEXT_PUBLIC_USDC_ADDRESS` | populated automatically by `make deploy` (via `scripts/sync-env.mjs` reading `cUSDC.underlying()` as truth for USDC) |
+| `packages/observer/.env` | `OBSERVER_FEES` (optional, cUSDC base units, 6 decimals) | flat per-order fee the relay charges. Default `0`. Synced on every daemon startup via `setObserverFees`. obs2 reads `OBSERVER_FEES_2` from `packages/contracts/.env` instead. |
 
 Buyer wallet needs at least 50 USDC (Circle faucet hands out 10 at a time, so run it a few times). Each observer wallet needs at least 0.02 ETH (0.01 bond + gas). The second observer is optional; leave `OBSERVER_PRIVATE_KEY_2` unset to skip it.
 
@@ -148,6 +150,7 @@ struct Order {
   address observer;
   euint64 encProductId;   // what to buy, observer decrypts
   euint64 encPaid;        // cUSDC escrowed, observer decrypts to verify
+  euint64 platformFee;    // 0.25% cut split to treasury at fulfillment
   euint128 encAesKey;     // AES-128 key for the code, buyer decrypts
   string ipfsCid;         // pointer to AES-encrypted code
   uint256 deadline;
@@ -155,9 +158,13 @@ struct Order {
 }
 ```
 
-`placeOrder` emits **`OrderInProccessed`** when the picked observer had a free slot (status `Pending`) or **`OrderInQueued`** when waitlisted behind an earlier order on the same observer (status `Queued`). Once the head order clears, the next queued one auto-promotes to `Pending` with a fresh deadline.
+Checkout is two-step. `quoteOrder(productId, observer, amountUsdc)` computes the encrypted total (`price + observerFee + platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits `OrderQuoted(pendingId, buyer, observer, productId, expectedTotalHandle, expiresAt)`. The buyer unseals the total, re-encrypts as the cUSDC approve amount, then calls `confirmOrder(pendingId)`. `confirmOrder` pulls the allowance via `transferFromAllowance`, FHE.eq-verifies it against the stored quote, and silently zeros the escrow plus refunds in-place on mismatch. The buyer can't tamper because the comparison value is contract-computed.
 
-Three settlement paths. `fulfillOrder` means the observer delivered, escrow goes to observer (status `Fulfilled`). `rejectOrder` is the honest-decline path, escrow returns to the buyer and the bond stays intact (status `Rejected`). `refund` is what the buyer calls after the 10-minute deadline passes; it works on both `Pending` and `Queued` orders and slashes 50% of the observer's bond (status `Refunded`).
+`confirmOrder` emits **`OrderInProccessed`** when the picked observer had a free slot (status `Pending`) or **`OrderInQueued`** when waitlisted behind an earlier order on the same observer (status `Queued`). Once the head order clears, the next queued one auto-promotes to `Pending` with a fresh deadline.
+
+Three settlement paths. `fulfillOrder` means the observer delivered, escrow splits to observer (`encPaid - platformFee`) and treasury (`platformFee`) in the same tx (status `Fulfilled`). `rejectOrder` is the honest-decline path, escrow returns to the buyer and the bond stays intact (status `Rejected`). `refund` is what the buyer calls after the 10-minute deadline passes; it works on both `Pending` and `Queued` orders and slashes 50% of the observer's bond (status `Refunded`).
+
+Observers publish a flat per-order fee at registration (`registerObserver(uint64 fees)`) and can update it any time via `setObserverFees`. Fees are plaintext `uint64` on the `ObserverDetails` struct so the dApp can render them directly in the relay picker.
 
 Access control uses `FHE.allow(handle, address)` per value. The observer gets ACL on `encProductId` and `encPaid`. The buyer gets ACL on `encAesKey`. That's it.
 
@@ -168,6 +175,8 @@ The observer is the off-chain execution layer. It watches the chain, decrypts wh
 It's a stateless Node process. Each poll iteration it re-checks on-chain status, so dedupe across restarts is free and there is no database.
 
 Sigill supports multiple observers in parallel. Each has a configurable slot count (capacity for active orders); buyers pick which observer fulfils their order at `placeOrder`. If the picked observer is at capacity, the order is `Queued` and starts the moment the head order clears. The `make all` target runs two observers side-by-side using `OBSERVER_PRIVATE_KEY` and `OBSERVER_PRIVATE_KEY_2`.
+
+**At startup**, the daemon calls `setObserverFees(OBSERVER_FEES)` on Sigill so the on-chain fee always matches whatever the operator has in their `.env`. A restart is enough to update the published fee.
 
 **What the daemon does each loop**
 
@@ -199,7 +208,7 @@ Reloadly and Pinata creds are both mandatory. The daemon refuses to start withou
 
 ## Fees
 
-Not finalised yet. We're still working out how the observer and protocol get paid: leading proposal is a small fixed-plus-percentage protocol fee combined with an observer-set markup that buyers see in the relay picker. Slashing rules and bond sizing are still in flux too. Working draft, with examples and open questions, is in [docs/fee-model.md](docs/fee-model.md).
+Wave 4 ships the first half of the [fee model draft](docs/fee-model.md): a flat 0.25% platform fee deducted at fulfillment and routed to a treasury address, plus a per-observer flat fee the relay publishes at registration and the buyer sees in the picker before placing the order. The slashing-to-buyer payout and bond-scales-with-order-size pieces are still proposals, not shipped.
 
 ## Stack
 
