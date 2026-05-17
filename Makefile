@@ -48,13 +48,13 @@ run-obs1:
 	cd packages/observer && pnpm run start
 
 run-obs2:
-	@$(DOTENV); cd packages/observer && OBSERVER_PRIVATE_KEY=$$OBSERVER_PRIVATE_KEY_2 pnpm run start
+	@$(DOTENV); cd packages/observer && OBSERVER_PRIVATE_KEY=$$OBSERVER_PRIVATE_KEY_2 OBSERVER_FEES=$$OBSERVER_FEES_2 pnpm run start
 
 run: clean-next
 	@trap 'kill 0' EXIT INT TERM; \
 	(cd packages/app && pnpm run dev 2>&1 | sed -e 's/^/[app] /') & \
 	(cd packages/observer && pnpm run start 2>&1 | sed -e 's/^/[obs1] /') & \
-	($(DOTENV); cd packages/observer && OBSERVER_PRIVATE_KEY=$$OBSERVER_PRIVATE_KEY_2 pnpm run start 2>&1 | sed -e 's/^/[obs2] /') & \
+	($(DOTENV); cd packages/observer && OBSERVER_PRIVATE_KEY=$$OBSERVER_PRIVATE_KEY_2 OBSERVER_FEES=$$OBSERVER_FEES_2 pnpm run start 2>&1 | sed -e 's/^/[obs2] /') & \
 	wait
 
 all: setup run

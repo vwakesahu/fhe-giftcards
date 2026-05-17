@@ -77,6 +77,7 @@ export function useObservers(): {
       slotLeft: r.slotLeft,
       soltSize: r.soltSize,
       ordersCompleted,
+      observerFees: r.observerFees,
     });
   });
 

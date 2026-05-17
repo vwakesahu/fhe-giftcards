@@ -256,7 +256,10 @@ export const sigillAbi = [
   // Roster — replaces the static OBSERVERS placeholder list. Returns one
   // ObserverDetails per registered observer. Field names mirror the contract
   // (`sucessRate`, `soltSize` typos kept intentionally so the ABI matches).
-  // `observerFees` is the encrypted euint64 handle for the relay's flat fee.
+  // `observerFees` is now plaintext (uint64) in cUSDC base units. The
+  // contract re-encrypts it inside `_quoteOrder` only for the FHE math —
+  // the on-chain storage and getter return the raw amount, so the picker
+  // can display the relay's fee directly without a decrypt step.
   {
     name: "getObserverDetail",
     type: "function",
@@ -270,10 +273,17 @@ export const sigillAbi = [
           { name: "sucessRate", type: "uint256" },
           { name: "slotLeft", type: "uint256" },
           { name: "soltSize", type: "uint256" },
-          { name: "observerFees", type: "uint256" },
+          { name: "observerFees", type: "uint64" },
         ],
       },
     ],
+  },
+  {
+    name: "setObserverFees",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "newFees", type: "uint64" }],
+    outputs: [],
   },
   {
     name: "getObservers",
@@ -432,6 +442,11 @@ export type ObserverEntry = {
   ordersCompleted: bigint; // from getOrderCompleted(addr)
   slotLeft: bigint;
   slotSize: bigint;
+  // Flat fee the relay charges per order, in cUSDC base units (6 decimals).
+  // Read directly from getObserverDetail — plaintext on-chain since the
+  // contract switched from euint64 → uint64 (re-encrypted only inside the
+  // quote computation).
+  feeUsdc: bigint;
   status: "online" | "full";
 };
 
@@ -440,6 +455,7 @@ export function toObserverEntry(raw: {
   slotLeft: bigint;
   soltSize: bigint;
   ordersCompleted: bigint;
+  observerFees: bigint;
 }): ObserverEntry {
   const slotLeft = raw.slotLeft;
   return {
@@ -448,6 +464,7 @@ export function toObserverEntry(raw: {
     ordersCompleted: raw.ordersCompleted,
     slotLeft,
     slotSize: raw.soltSize,
+    feeUsdc: raw.observerFees,
     status: slotLeft > 0n ? "online" : "full",
   };
 }

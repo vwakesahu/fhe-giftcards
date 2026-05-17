@@ -71,6 +71,23 @@ export function ObserverStep({
   );
 }
 
+// Hard cap: any "fee" above $1M is unmistakably an FHE ciphertext handle
+// bleeding through a stale deployed contract (the on-chain struct still has
+// euint64, the new ABI expects plaintext uint64). Show "—" rather than
+// render 71-digit nonsense — and prompt a redeploy.
+const FEE_SANITY_CEILING = 1_000_000n * 1_000_000n; // 1M USDC in base units
+
+function formatFee(feeUsdc: bigint): string {
+  if (feeUsdc === 0n) return "Free";
+  if (feeUsdc > FEE_SANITY_CEILING) return "—";
+  // 6-decimal USDC base units → show up to 2 decimals, drop trailing zeros.
+  const whole = feeUsdc / 1_000_000n;
+  const frac = feeUsdc % 1_000_000n;
+  if (frac === 0n) return `${whole} USDC`;
+  const fracStr = frac.toString().padStart(6, "0").slice(0, 2).replace(/0+$/, "");
+  return `${whole}.${fracStr || "0"} USDC`;
+}
+
 function ObserverRow({
   observer,
   index,
@@ -90,6 +107,7 @@ function ObserverRow({
       ? `${observer.ordersCompleted} fulfilled`
       : "new relay";
   const queueLabel = `${observer.slotLeft.toString()}/${observer.slotSize.toString()} slots`;
+  const feeLabel = formatFee(observer.feeUsdc);
 
   return (
     <motion.button
@@ -98,7 +116,7 @@ function ObserverRow({
       transition={{ duration: 0.3, ease: EASE_OUT }}
       onClick={disabled ? undefined : onSelect}
       disabled={disabled}
-      className={`group relative grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto_36px] items-center gap-5 w-full h-16 px-5 text-left transition-colors ${
+      className={`group relative grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto_auto_36px] items-center gap-5 w-full h-16 px-5 text-left transition-colors ${
         first ? "" : "border-t border-white/4"
       } ${
         disabled
@@ -130,6 +148,14 @@ function ObserverRow({
       <span className="font-mono text-[12px] text-muted-foreground/55 truncate">
         {shortAddr(observer.address, 6, 4)}
       </span>
+      <div className="flex flex-col items-end leading-tight">
+        <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground/45">
+          Fee
+        </span>
+        <span className="text-[12.5px] font-medium tabular-nums text-foreground/80">
+          {feeLabel}
+        </span>
+      </div>
       {disabled ? (
         <span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive/85">
           Queue full

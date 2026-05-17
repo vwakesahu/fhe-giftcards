@@ -150,7 +150,12 @@ export function OrderDetail({ orderId }: { orderId: string }) {
           publicClient={publicClient}
           walletClient={walletClient}
         />
-        <Metadata order={order} />
+        <Metadata
+          order={order}
+          isBuyer={isBuyer}
+          publicClient={publicClient}
+          walletClient={walletClient}
+        />
       </div>
     </>
   );
@@ -437,8 +442,26 @@ function Revealed({ code }: { code: string }) {
 
 // ───── Metadata ──────────────────────────────────────────────
 
+// Format a uint64 cUSDC base-units value (6 decimals) for display.
+// Returns "X.XX cUSDC" with trailing zeros trimmed.
+function formatCusdc(value: bigint): string {
+  if (value === 0n) return "0 cUSDC";
+  const whole = value / 1_000_000n;
+  const frac = value % 1_000_000n;
+  if (frac === 0n) return `${whole} cUSDC`;
+  const fracStr = frac
+    .toString()
+    .padStart(6, "0")
+    .slice(0, 3)
+    .replace(/0+$/, "");
+  return `${whole}.${fracStr || "0"} cUSDC`;
+}
+
 function Metadata({
   order,
+  isBuyer,
+  publicClient,
+  walletClient,
 }: {
   order:
     | {
@@ -451,6 +474,9 @@ function Metadata({
       }
     | null
     | undefined;
+  isBuyer: boolean;
+  publicClient: ReturnType<typeof usePublicClient>;
+  walletClient: ReturnType<typeof useWalletClient>["data"];
 }) {
   const deadlineDate = order ? new Date(Number(order.deadline) * 1000) : null;
   const deadline = deadlineDate
@@ -458,6 +484,45 @@ function Metadata({
     : "—";
   const sameParty =
     !!order && order.buyer.toLowerCase() === order.observer.toLowerCase();
+
+  // Buyer-only unseal of encPaid — the contract `FHE.allow`s the escrowed
+  // total to msg.sender at confirm time, so the buyer's wallet permit is
+  // the only key that opens it. Observer would need a different ACL grant.
+  const [paid, setPaid] = useState<bigint | null>(null);
+  const [unsealing, setUnsealing] = useState(false);
+
+  async function unsealPayment() {
+    if (!order || !publicClient || !walletClient) return;
+    try {
+      setUnsealing(true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const client = await ensureCofheConnected(publicClient as any, walletClient as any);
+      // Same retry shape as the AES key unseal — FHE threshold network can
+      // lag a few seconds behind the on-chain block.
+      let value: bigint | null = null;
+      for (let i = 0; i < 10; i++) {
+        try {
+          const result = await client
+            .decryptForView(order.encPaid, FheTypes.Uint64)
+            .withPermit()
+            .execute();
+          if (result !== undefined && result !== null) {
+            value = result as bigint;
+            break;
+          }
+        } catch {
+          /* threshold still processing — retry */
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      if (value === null) throw new Error("Decryption pending — try again in a bit");
+      setPaid(value);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message.slice(0, 120) : "Unseal failed");
+    } finally {
+      setUnsealing(false);
+    }
+  }
 
   return (
     <div className="rounded-2xl border border-white/6">
@@ -480,10 +545,44 @@ function Metadata({
         )}
       </div>
 
+      {/* Total paid — shows the encPaid handle until the buyer unseals it.
+          After unseal we display the plaintext cUSDC amount.              */}
+      <div className="px-5 py-3 border-t border-white/4 flex items-center justify-between gap-6">
+        <p className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground/45">
+          Total paid
+        </p>
+        {paid !== null ? (
+          <span className="text-[13px] font-medium tabular-nums text-sp">
+            {formatCusdc(paid)}
+          </span>
+        ) : (
+          <div className="inline-flex items-center gap-2">
+            <span className="font-mono text-[12px] text-muted-foreground/55 truncate">
+              {shortHandle(order?.encPaid, 5)}
+            </span>
+            {isBuyer && order && (
+              <button
+                onClick={unsealPayment}
+                disabled={unsealing}
+                className="inline-flex items-center gap-1.5 h-6 px-2 text-[11px] font-medium border border-white/10 hover:bg-white/5 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {unsealing ? (
+                  <>
+                    <Spinner size={10} className="text-sp" /> Unsealing
+                  </>
+                ) : (
+                  "Unseal"
+                )}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Compact 2-col grid for handles + IPFS */}
-      <div className="grid grid-cols-2 divide-x divide-white/4">
+      <div className="grid grid-cols-2 divide-x divide-white/4 border-t border-white/4">
         <Cell label="Product" value={shortHandle(order?.encProductId, 5)} />
-        <Cell label="Payment" value={shortHandle(order?.encPaid, 5)} />
+        <Cell label="Payment handle" value={shortHandle(order?.encPaid, 5)} />
       </div>
       <div className="px-5 py-3 border-t border-white/4 flex items-center justify-between gap-6">
         <p className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground/45">

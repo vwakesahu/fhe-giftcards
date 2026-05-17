@@ -9,6 +9,24 @@ import { EASE_OUT } from "@/lib/motion";
 import { shortAddr } from "@/lib/format";
 import { Spinner } from "@/components/spinner";
 
+// 6-decimal cUSDC base units → human string. `freeAsLabel` renders 0 as
+// "Free" rather than "0 USDC" — used for the relay fee row.
+function formatUsdc(
+  value: bigint,
+  opts: { freeAsLabel?: boolean } = {},
+): string {
+  if (value === 0n) return opts.freeAsLabel ? "Free" : "0 USDC";
+  const whole = value / 1_000_000n;
+  const frac = value % 1_000_000n;
+  if (frac === 0n) return `${whole} USDC`;
+  const fracStr = frac
+    .toString()
+    .padStart(6, "0")
+    .slice(0, 3)
+    .replace(/0+$/, "");
+  return `${whole}.${fracStr || "0"} USDC`;
+}
+
 export function ConfirmStep({
   product,
   observer,
@@ -26,6 +44,18 @@ export function ConfirmStep({
     observer.ordersCompleted > 0n
       ? `${observer.ordersCompleted} order${observer.ordersCompleted === 1n ? "" : "s"} fulfilled`
       : "no track record yet";
+  // All three components are plaintext at this step. The on-chain contract
+  // re-encrypts them for the quote total via FHE, but the user-facing math
+  // is the same: total = card price + relay fee + 0.25% of card price.
+  const priceBase = BigInt(product.priceUsdc) * 1_000_000n;
+  const platformFeeBase = (priceBase * 25n) / 10_000n;
+  const feeIsHandle =
+    observer.feeUsdc > 1_000_000n * 1_000_000n; // sanity ceiling — see step-observer
+  const observerFeeBase = feeIsHandle ? 0n : observer.feeUsdc;
+  const totalBase = priceBase + observerFeeBase + platformFeeBase;
+  const feeLabel = formatUsdc(observer.feeUsdc, { freeAsLabel: true });
+  const platformFeeLabel = `${formatUsdc(platformFeeBase)} · 0.25%`;
+  const totalLabel = formatUsdc(totalBase);
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -42,7 +72,10 @@ export function ConfirmStep({
         </div>
         <div className="divide-y divide-white/4">
           <Row label="Product" value={`${product.label} · $${product.face}`} sealed />
-          <Row label="You pay" value={`${product.priceUsdc}.00 cUSDC`} sealed />
+          <Row label="Card price" value={`${product.priceUsdc}.00 cUSDC`} />
+          <Row label="Relay fee" value={feeLabel} />
+          <Row label="Platform fee" value={platformFeeLabel} />
+          <Row label="Total to pay" value={totalLabel} sealed />
           <Row label="Observer track record" value={completedLabel} />
           <Row label="Relay" value={shortAddr(observer.address, 6, 4)} mono />
         </div>
