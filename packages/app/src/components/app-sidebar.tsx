@@ -21,7 +21,7 @@ export function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-[220px] border-r border-white/6 bg-background flex flex-col z-40">
+    <aside className="hidden md:flex fixed inset-y-0 left-0 w-[220px] border-r border-white/6 bg-background flex-col z-40">
       {/* Brand */}
       <div className="h-14 flex items-center px-5 border-b border-white/6">
         <Link href="/" className="inline-flex items-baseline gap-2">
@@ -34,13 +34,9 @@ export function AppSidebar() {
         </Link>
       </div>
 
-      {/* Section label */}
-      <div className="px-5 pt-5 pb-2 text-[10.5px] font-medium uppercase tracking-[0.12em] text-muted-foreground/40">
-        Workspace
-      </div>
-
-      {/* Nav */}
-      <nav className="px-2 flex flex-col gap-0.5">
+      {/* Nav. Dropping the "Workspace" section label to match the
+          landing's calmer chrome. */}
+      <nav className="px-2 pt-3 flex flex-col gap-0.5">
         {NAV.map((item) => {
           const isActive =
             item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);

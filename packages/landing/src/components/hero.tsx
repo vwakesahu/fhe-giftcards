@@ -340,7 +340,7 @@ function ProductRow({
           <motion.span
             key="bar"
             layoutId="row-indicator"
-            className="absolute left-0 top-[6px] bottom-[6px] w-[2px] bg-[#34d399] rounded-r-full"
+            className="absolute left-0 top-[6px] bottom-[6px] w-[2px] bg-[#7dd4a4] rounded-r-full"
             transition={{ type: "spring", duration: 0.5, bounce: 0.22 }}
           />
         )}
@@ -362,7 +362,7 @@ function ProductRow({
       <span
         className={`size-5 rounded-full flex items-center justify-center transition-all ${
           active
-            ? "bg-[#34d399] text-[#0a0a0a]"
+            ? "bg-[#7dd4a4] text-[#0a0a0a]"
             : "border border-white/[0.1] text-transparent"
         }`}
       >
@@ -413,7 +413,7 @@ function Row({
       <p
         className={`tabular-nums ${
           mono ? "font-mono text-[11px]" : "text-[12.5px]"
-        } ${sealed ? "text-[#34d399] font-medium" : "text-foreground/85"}`}
+        } ${sealed ? "text-[#7dd4a4] font-medium" : "text-foreground/85"}`}
       >
         {value}
       </p>
@@ -430,7 +430,7 @@ function PlaceButton() {
       transition={{ duration: 0.6, delay: 1.5, ease }}
       className="flex items-center justify-end"
     >
-      <div className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-[#34d399] text-[#0a0a0a] text-[12.5px] font-medium">
+      <div className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-[#7dd4a4] text-[#0a0a0a] text-[12.5px] font-medium">
         <Lock className="size-3.5" strokeWidth={2.5} />
         Seal &amp; place order
       </div>

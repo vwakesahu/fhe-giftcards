@@ -81,40 +81,41 @@
 }
 
 .dark {
-  --background: #050505;
-  --foreground: #e5e5e5;
-  --card: #0a0a0a;
-  --card-foreground: #e5e5e5;
-  --popover: #0a0a0a;
-  --popover-foreground: #e5e5e5;
-  --primary: #e5e5e5;
-  --primary-foreground: #050505;
-  --secondary: #111111;
-  --secondary-foreground: #e5e5e5;
-  --muted: #111111;
-  /* Pre-2026 value was #666666 which, when used with the codebase's common
-     opacity modifiers (/40, /55, /65 etc.), compounded into ~22% gray on
-     near-black: WCAG fail and physically hard to read. Pushing the base to
-     #c8c8c8 keeps the existing hierarchy (lower opacity = more muted) while
-     making every tier above /40 cross AA-large. /20 and below are reserved
-     for decorative uses (giant 404, placeholder dots) and stay invisible. */
-  --muted-foreground: #c8c8c8;
-  --accent: #111111;
-  --accent-foreground: #e5e5e5;
+  /* Aligned with the landing palette: warm near-black background,
+     warm cream foreground, sage accent. The intent is for the app
+     and the landing's hero mock to read as the same product. */
+  --background: #0d0c0a;
+  --foreground: #f0ece4;
+  --card: #141310;
+  --card-foreground: #f0ece4;
+  --popover: #141310;
+  --popover-foreground: #f0ece4;
+  --primary: #f0ece4;
+  --primary-foreground: #0d0c0a;
+  --secondary: #1a1815;
+  --secondary-foreground: #f0ece4;
+  --muted: #1a1815;
+  /* Warm equivalent of the previous #c8c8c8. Same luminance so the
+     /40, /55, /65 opacity tiers used across the app stay readable,
+     just shifted from cool grey to warm cream grey to match the
+     new background. */
+  --muted-foreground: #cdc4b3;
+  --accent: #1a1815;
+  --accent-foreground: #f0ece4;
   --destructive: #ef4444;
-  --border: rgba(255, 255, 255, 0.06);
-  --input: rgba(255, 255, 255, 0.08);
-  --ring: #404040;
-  --sp: #34d399;
-  --sidebar: #0a0a0a;
-  --sidebar-foreground: #e5e5e5;
-  --sidebar-primary: #34d399;
-  --sidebar-primary-foreground: #050505;
-  --sidebar-accent: #111111;
-  --sidebar-accent-foreground: #e5e5e5;
-  --sidebar-border: rgba(255, 255, 255, 0.06);
-  --sidebar-ring: #404040;
-  --cyan: #22d3ee;
+  --border: rgba(240, 236, 228, 0.08);
+  --input: rgba(240, 236, 228, 0.08);
+  --ring: rgba(240, 236, 228, 0.25);
+  --sp: #7dd4a4;
+  --sidebar: #0d0c0a;
+  --sidebar-foreground: #f0ece4;
+  --sidebar-primary: #7dd4a4;
+  --sidebar-primary-foreground: #0d0c0a;
+  --sidebar-accent: #1a1815;
+  --sidebar-accent-foreground: #f0ece4;
+  --sidebar-border: rgba(240, 236, 228, 0.08);
+  --sidebar-ring: rgba(240, 236, 228, 0.25);
+  --cyan: #7dd4a4;
 }
 
 @layer base {
@@ -125,7 +126,7 @@
     @apply bg-background text-foreground;
   }
   ::selection {
-    background: rgba(52, 211, 153, 0.2);
+    background: rgba(125, 212, 164, 0.25);
   }
 }
 
@@ -187,10 +188,10 @@
 
 /* Accent glow for italic serif accents (matches landing) */
 .glow-text {
-  text-shadow: 0 0 20px rgba(52, 211, 153, 0.3), 0 0 40px rgba(52, 211, 153, 0.1);
+  text-shadow: 0 0 20px rgba(125, 212, 164, 0.3), 0 0 40px rgba(125, 212, 164, 0.1);
 }
 .glow-cyan {
-  text-shadow: 0 0 20px rgba(34, 211, 238, 0.3), 0 0 40px rgba(34, 211, 238, 0.1);
+  text-shadow: 0 0 20px rgba(125, 212, 164, 0.3), 0 0 40px rgba(125, 212, 164, 0.1);
 }
 
 /* Subtle vertical divider used across cards */
