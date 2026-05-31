@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/reloadly-live-test.mjs --search=amazon --country=US)",
+      "Bash(node --check scripts/reloadly-live-test.mjs)",
+      "Bash(node scripts/reloadly-live-test.mjs --buy --product=5 --amount=1 --country=US --email=vivek@inco.network)",
+      "Bash(node scripts/reloadly-live-test.mjs --buy --products=20501,18747,20308 --amount=1 --country=US --email=vivek@inco.network)"
+    ]
+  }
+}

@@ -2,12 +2,12 @@
 
 Private checkout using FHE on Base Sepolia. You buy a gift card, and nobody on-chain can see what you bought, how much you paid, or the code you got back.
 
-Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o), **Wave 4** [youtu.be/W8zUIEEb8uo](https://youtu.be/W8zUIEEb8uo).
+Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o), **Wave 4** [youtu.be/W8zUIEEb8uo](https://youtu.be/W8zUIEEb8uo), **Wave 5** _TBD_.
 
 **Deployed on Base Sepolia**
 
-- Sigill: [`0x0dED…8470`](https://sepolia.basescan.org/address/0x0dED2B81A0463e6af64110d637CADda4545D8470)
-- cUSDC (ConfidentialERC20): [`0x93Db…0E06`](https://sepolia.basescan.org/address/0x93Db1E63315463bA6A25918820959d1086c50E06)
+- Sigill: [`0x34F6…85Ee6`](https://sepolia.basescan.org/address/0x34F62D4B05631a67f17b56BeDD2F946373a85Ee6)
+- cUSDC (ConfidentialERC20): [`0x0F8d…1c8E`](https://sepolia.basescan.org/address/0x0F8dF4b67c7C553D9470182d42Af783c6D5E1c8E)
 - USDC (Mock on Base Sepolia): [`0xe29D…424F`](https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f)
 
 <p>
@@ -74,11 +74,12 @@ What you'll need to fill in:
 |---|---|---|
 | `packages/contracts/.env` | `PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY`, `OBSERVER_PRIVATE_KEY_2` | any Base Sepolia wallets funded with test ETH (one deployer + one or two observers) |
 | " | `USDC_ADDRESS` | prefilled, Circle's Base Sepolia USDC. Faucet at [faucet.circle.com](https://faucet.circle.com) |
-| " | `RELOADLY_CLIENT_ID` + `_SECRET` | [reloadly.com](https://reloadly.com), switch to Test mode, Developers section |
+| " | `RELOADLY_CLIENT_ID` + `_SECRET` | [reloadly.com](https://reloadly.com) Sandbox mode (test cards). Live cards: set `RELOADLY_LIVE_CLIENT_ID` + `_SECRET` + `RELOADLY_ENV=live` instead, see `packages/observer/src/giftcard.ts`. |
 | " | `PINATA_JWT`, `PINATA_GATEWAY` | [pinata.cloud](https://pinata.cloud), API Keys |
 | " | `BASE_SEPOLIA_RPC_URL` | the public endpoint is flaky, prefer Alchemy or Infura or QuickNode |
 | `packages/app/.env.local` | `NEXT_PUBLIC_SIGILL_ADDRESS`, `NEXT_PUBLIC_CUSDC_ADDRESS`, `NEXT_PUBLIC_USDC_ADDRESS` | populated automatically by `make deploy` (via `scripts/sync-env.mjs` reading `cUSDC.underlying()` as truth for USDC) |
 | `packages/observer/.env` | `OBSERVER_FEES` (optional, cUSDC base units, 6 decimals) | flat per-order fee the relay charges. Default `0`. Synced on every daemon startup via `setObserverFees`. obs2 reads `OBSERVER_FEES_2` from `packages/contracts/.env` instead. |
+| `packages/app/.env.local` | `SITE_PASSWORD` (optional) | HTTP Basic Auth gate on the whole dApp via `src/middleware.ts`. Unset = no gate. Set in the hosting env when you want a staged preview behind a single shared password. |
 
 Buyer wallet needs at least 50 USDC (Circle faucet hands out 10 at a time, so run it a few times). Each observer wallet needs at least 0.02 ETH (0.01 bond + gas). The second observer is optional; leave `OBSERVER_PRIVATE_KEY_2` unset to skip it.
 
@@ -208,12 +209,21 @@ Reloadly and Pinata creds are both mandatory. The daemon refuses to start withou
 
 ## Fees
 
-Wave 4 ships the first half of the [fee model draft](docs/fee-model.md): a flat 0.25% platform fee deducted at fulfillment and routed to a treasury address, plus a per-observer flat fee the relay publishes at registration and the buyer sees in the picker before placing the order. The slashing-to-buyer payout and bond-scales-with-order-size pieces are still proposals, not shipped.
+Wave 4 ships the first half of the [fee model draft](docs/fee-model.md): a flat 0.25% platform fee deducted at fulfillment and routed to a treasury address, plus a per-observer flat fee the relay publishes at registration and the buyer sees in the picker before placing the order. The slashing-to-buyer payout and bond-scales-with-order-size pieces are still proposals, captured in [docs/reputation-and-slashing.md](docs/reputation-and-slashing.md) as the Wave 5 planning surface.
+
+## Catalog
+
+The dApp ships eight brands in the picker. Only one is wired on-chain right now; the rest are display-only ("Coming soon") to signal where the catalog is going without claiming what isn't built yet.
+
+- **App Store & iTunes** — live, routes to Reloadly product 21 ($2 range).
+- **Netflix, Spotify, Google Play, Xbox Live, PlayStation, Steam, Roblox** — coming soon. Their on-chain product slots aren't activated, so `quoteOrder` rejects them at the contract layer regardless of UI state.
+
+To activate another brand, set `productActive[id]` on Sigill (admin-only `setProductActive(id, true)`), add the brand's Reloadly product ID to `PRODUCT_MAP_LIVE` in `packages/observer/src/giftcard.ts`, and flip `comingSoon: false` in the matching `PRODUCTS` entry on the app + landing.
 
 ## Stack
 
 - **Contracts**: Solidity + [Fhenix CoFHE](https://github.com/FhenixProtocol), Hardhat
-- **Gift cards**: [Reloadly](https://reloadly.com) sandbox
+- **Gift cards**: [Reloadly](https://reloadly.com) — sandbox by default, production (real Apple / Netflix / etc. codes) when `RELOADLY_ENV=live`
 - **Storage**: IPFS via [Pinata](https://pinata.cloud)
 - **Network**: Base Sepolia
 - **Frontend**: Next.js, Tailwind v4, shadcn, wagmi + RainbowKit, @cofhe/sdk/web
