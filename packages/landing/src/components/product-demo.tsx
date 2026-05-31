@@ -9,7 +9,7 @@ const steps = [
   {
     n: "01",
     title: "Pick a card",
-    body: "Amazon US, $5 or $10 or $25. The product ID is encrypted in your browser before it ever touches Base.",
+    body: "App Store & iTunes is live today; Netflix, Spotify, Google Play, Xbox, PlayStation, Steam, and Roblox are queued behind it. Whichever you pick, the product ID is encrypted in your browser before it ever touches Base.",
   },
   {
     n: "02",

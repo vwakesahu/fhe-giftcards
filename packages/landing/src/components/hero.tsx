@@ -18,6 +18,7 @@ import {
   PRODUCTS,
   RELAY_ADDR,
   SELECTED_PRODUCT_ID,
+  SUPPORTED_BRANDS,
 } from "@/lib/constants";
 import { SigillWordmark } from "./icons";
 
@@ -31,9 +32,56 @@ export function Hero() {
       <div className="relative z-10 max-w-7xl mx-auto px-6 sm:px-10">
         <Preamble />
         <Hairline />
+        <SupportedBrands />
         <StageMock />
       </div>
     </section>
+  );
+}
+
+/* Brand strip beneath the "the app, mid-flow" hairline. Quick visual answer
+   to "what can I actually buy". App Store is live; the rest are queued and
+   render greyed with a "soon" tag, matching the in-app picker behaviour. */
+function SupportedBrands() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.7, delay: 1.55, ease }}
+      className="mb-12 sm:mb-16 -mt-4 sm:-mt-8 flex flex-wrap items-center gap-x-3 gap-y-3"
+    >
+      <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-foreground/35 mr-1">
+        We support
+      </span>
+      {SUPPORTED_BRANDS.map((b) => {
+        const live = "live" in b && b.live;
+        return (
+          <span
+            key={b.name}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] ${
+              live
+                ? "border-foreground/25 text-foreground/90"
+                : "border-foreground/10 text-foreground/50"
+            }`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={b.icon}
+              alt=""
+              width={12}
+              height={12}
+              className={`size-3 ${live ? "" : "opacity-70 grayscale"}`}
+            />
+            <span>{b.name}</span>
+            {live && (
+              <span className="ml-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-[#7dd4a4]">
+                Live
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </motion.div>
   );
 }
 
@@ -326,6 +374,7 @@ function ProductRow({
   first: boolean;
   delay: number;
 }) {
+  const disabled = "comingSoon" in product && product.comingSoon;
   return (
     <motion.div
       initial={{ opacity: 0, x: -6 }}
@@ -333,10 +382,10 @@ function ProductRow({
       transition={{ duration: 0.4, delay, ease }}
       className={`relative grid grid-cols-[40px_minmax(0,1fr)_auto_24px] items-center gap-3 h-11 px-4 ${
         first ? "" : "border-t border-white/[0.04]"
-      } ${active ? "bg-white/[0.025]" : ""}`}
+      } ${active && !disabled ? "bg-white/[0.025]" : ""} ${disabled ? "opacity-45" : ""}`}
     >
       <AnimatePresence>
-        {active && (
+        {active && !disabled && (
           <motion.span
             key="bar"
             layoutId="row-indicator"
@@ -353,15 +402,21 @@ function ProductRow({
         {product.label}{" "}
         <span className="text-foreground/45">· ${product.face}</span>
       </p>
-      <span className="text-[12.5px] font-semibold tabular-nums text-foreground/90">
-        {product.priceUsdc}
-        <span className="ml-1 text-[10.5px] text-foreground/40 font-normal">
-          USDC
+      {disabled ? (
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-foreground/40">
+          Coming soon
         </span>
-      </span>
+      ) : (
+        <span className="text-[12.5px] font-semibold tabular-nums text-foreground/90">
+          {product.priceUsdc}
+          <span className="ml-1 text-[10.5px] text-foreground/40 font-normal">
+            USDC
+          </span>
+        </span>
+      )}
       <span
         className={`size-5 rounded-full flex items-center justify-center transition-all ${
-          active
+          active && !disabled
             ? "bg-[#7dd4a4] text-[#0a0a0a]"
             : "border border-white/[0.1] text-transparent"
         }`}
@@ -386,7 +441,7 @@ function SealedEnvelope() {
         </p>
       </div>
       <div className="divide-y divide-white/[0.04]">
-        <Row label="Product" value="Amazon US · $10" />
+        <Row label="Product" value="App Store & iTunes · $2" />
         <Row label="You pay" value={DEMO_PAID_CUSDC} sealed />
         <Row label="Relay" value={RELAY_ADDR} mono />
       </div>

@@ -417,11 +417,80 @@ export const ORDER_STATUS = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUS)[number];
 
-// Product catalogue mirrors packages/contracts/scripts/giftcard.ts
+// Product catalogue. Only id=1 is wired on-chain right now (productActive[1]
+// is set, observer's PRODUCT_MAP routes 1 → Reloadly App Store & iTUNES US).
+// Coming-soon entries are display-only: their `id` does not correspond to an
+// active on-chain product, picking them is blocked client-side, and they're
+// rendered greyed out in the picker.
+//
+// Icons: simpleicons.org CDN SVGs. White variant works against the dark
+// editorial palette; brand-coloured variants used where they read cleaner.
 export const PRODUCTS = [
-  { id: 1, label: "Amazon US", face: 5, priceUsdc: 10 },
-  { id: 2, label: "Amazon US", face: 10, priceUsdc: 15 },
-  { id: 3, label: "Amazon US", face: 25, priceUsdc: 30 },
+  {
+    id: 1,
+    label: "App Store & iTunes",
+    face: 2,
+    priceUsdc: 2,
+    icon: "https://cdn.simpleicons.org/apple/white",
+    comingSoon: false,
+  },
+  {
+    id: 2,
+    label: "Netflix",
+    face: 20,
+    priceUsdc: 20,
+    icon: "https://cdn.simpleicons.org/netflix/E50914",
+    comingSoon: true,
+  },
+  {
+    id: 3,
+    label: "Spotify",
+    face: 10,
+    priceUsdc: 10,
+    icon: "https://cdn.simpleicons.org/spotify/1DB954",
+    comingSoon: true,
+  },
+  {
+    id: 4,
+    label: "Google Play",
+    face: 5,
+    priceUsdc: 5,
+    icon: "https://cdn.simpleicons.org/googleplay/white",
+    comingSoon: true,
+  },
+  {
+    id: 5,
+    label: "Xbox Live",
+    face: 5,
+    priceUsdc: 5,
+    // Locally hosted PNG (simpleicons' xbox glyph reads poorly against the dark theme).
+    icon: "/xbox.png",
+    comingSoon: true,
+  },
+  {
+    id: 6,
+    label: "PlayStation",
+    face: 25,
+    priceUsdc: 25,
+    icon: "https://cdn.simpleicons.org/playstation/0070D1",
+    comingSoon: true,
+  },
+  {
+    id: 7,
+    label: "Steam",
+    face: 20,
+    priceUsdc: 20,
+    icon: "https://cdn.simpleicons.org/steam/white",
+    comingSoon: true,
+  },
+  {
+    id: 8,
+    label: "Roblox",
+    face: 10,
+    priceUsdc: 10,
+    icon: "https://cdn.simpleicons.org/roblox/white",
+    comingSoon: true,
+  },
 ] as const;
 
 export type Product = (typeof PRODUCTS)[number];

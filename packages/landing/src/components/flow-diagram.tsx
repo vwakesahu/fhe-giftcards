@@ -23,7 +23,7 @@ const ease = [0.165, 0.84, 0.44, 1] as const;
 
 const INPUTS = [
   { label: "USDC", caption: "Plaintext token" },
-  { label: "Product choice", caption: "Amazon · $5 / $10 / $25" },
+  { label: "Product choice", caption: "Apple, Netflix, Spotify, more" },
   { label: "Buyer wallet", caption: "Your signer + decrypt key" },
 ] as const;
 

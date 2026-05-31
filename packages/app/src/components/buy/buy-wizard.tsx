@@ -68,6 +68,14 @@ export function BuyWizard() {
 
   async function handlePlace() {
     if (!product || !selectedObserver || !publicClient || !walletClient) return;
+    if (product.comingSoon) {
+      // Defensive: the picker disables coming-soon rows so this can't trigger
+      // through the UI, but reject anyway in case state was poked externally.
+      // The on-chain product isn't activated either, so quoteOrder would
+      // revert "unknown product" — we just want a cleaner error than that.
+      toast.error(`${product.label} is coming soon — not orderable yet`);
+      return;
+    }
     if (selectedObserver.status !== "online") {
       toast.error("Relay queue just filled up — pick another");
       return;

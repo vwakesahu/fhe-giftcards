@@ -1,12 +1,41 @@
 const RELOADLY_AUTH_URL = "https://auth.reloadly.com/oauth/token";
-const RELOADLY_SANDBOX_URL = "https://giftcards-sandbox.reloadly.com";
 
-/** ProductId (as encoded on-chain) → Reloadly product mapping. */
-export const PRODUCT_MAP: Record<number, { productId: number; label: string; unitPrice: number }> = {
-  1: { productId: 5, label: "Amazon US $5", unitPrice: 5 },
-  2: { productId: 5, label: "Amazon US $10", unitPrice: 10 },
-  3: { productId: 5, label: "Amazon US $25", unitPrice: 25 },
+// Reloadly has two environments behind separate audiences + credentials.
+// RELOADLY_ENV=live → real money, real cards. anything else → sandbox.
+function reloadlyEnv(): "sandbox" | "live" {
+  const v = (process.env.RELOADLY_ENV ?? "").toLowerCase();
+  return v === "live" || v === "production" ? "live" : "sandbox";
+}
+const RELOADLY_API_URL =
+  reloadlyEnv() === "live"
+    ? "https://giftcards.reloadly.com"
+    : "https://giftcards-sandbox.reloadly.com";
+
+function reloadlyClientId(): string | undefined {
+  return reloadlyEnv() === "live"
+    ? process.env.RELOADLY_LIVE_CLIENT_ID ?? process.env.RELOADLY_CLIENT_ID
+    : process.env.RELOADLY_CLIENT_ID;
+}
+function reloadlyClientSecret(): string | undefined {
+  return reloadlyEnv() === "live"
+    ? process.env.RELOADLY_LIVE_CLIENT_SECRET ?? process.env.RELOADLY_CLIENT_SECRET
+    : process.env.RELOADLY_CLIENT_SECRET;
+}
+
+/** ProductId (as encoded on-chain) → Reloadly product mapping.
+ *  Live and sandbox use different Reloadly product IDs, so we pick at boot
+ *  based on RELOADLY_ENV. Coming-soon brands in the dApp (Netflix, Spotify
+ *  etc.) deliberately don't appear here — their on-chain product slots
+ *  (productActive[2..8]) are not set, so quoteOrder would revert before the
+ *  observer ever sees them. Add them here when their slots get activated.  */
+const PRODUCT_MAP_LIVE: Record<number, { productId: number; label: string; unitPrice: number }> = {
+  1: { productId: 21, label: "App Store & iTunes $2", unitPrice: 2 },
 };
+const PRODUCT_MAP_SANDBOX: Record<number, { productId: number; label: string; unitPrice: number }> = {
+  1: { productId: 5, label: "Sandbox test card $2", unitPrice: 2 },
+};
+export const PRODUCT_MAP =
+  reloadlyEnv() === "live" ? PRODUCT_MAP_LIVE : PRODUCT_MAP_SANDBOX;
 
 // Reloadly OAuth tokens have a TTL (~24h). Without expiry tracking the daemon
 // caches a token forever and starts 401-ing after the first day of uptime.
@@ -28,7 +57,9 @@ async function getAccessToken(id: string, secret: string, forceRefresh = false):
       client_id: id,
       client_secret: secret,
       grant_type: "client_credentials",
-      audience: RELOADLY_SANDBOX_URL,
+      // audience must match the env: sandbox creds + sandbox audience, live
+      // creds + live audience. Mismatch returns 401 INVALID_CREDENTIALS.
+      audience: RELOADLY_API_URL,
     }),
   });
   if (!res.ok) throw new Error(`Reloadly auth failed: ${res.status} ${await res.text()}`);
@@ -46,13 +77,15 @@ async function getAccessToken(id: string, secret: string, forceRefresh = false):
  * the observer must be configured correctly or refuse to fulfil).
  */
 export async function purchaseGiftCard(productId: number, unitPrice: number, orderId: bigint): Promise<string> {
-  if (!process.env.RELOADLY_CLIENT_ID || !process.env.RELOADLY_CLIENT_SECRET) {
+  const id = reloadlyClientId();
+  const secret = reloadlyClientSecret();
+  if (!id || !secret) {
     throw new Error(
-      "RELOADLY_CLIENT_ID and RELOADLY_CLIENT_SECRET are required — set them in .env.local",
+      `Reloadly creds missing for env=${reloadlyEnv()}. ` +
+        `Live needs RELOADLY_LIVE_CLIENT_ID + RELOADLY_LIVE_CLIENT_SECRET; ` +
+        `sandbox needs RELOADLY_CLIENT_ID + RELOADLY_CLIENT_SECRET.`,
     );
   }
-  const id: string = process.env.RELOADLY_CLIENT_ID;
-  const secret: string = process.env.RELOADLY_CLIENT_SECRET;
 
   const headersFor = (token: string) => ({
     "Content-Type": "application/json",
@@ -63,17 +96,17 @@ export async function purchaseGiftCard(productId: number, unitPrice: number, ord
   // Tiny helper: fetch, and on 401 refresh the token + retry once. Works for
   // both the order-place call and the subsequent card-poll calls.
   async function reloadlyFetch(url: string, init?: RequestInit): Promise<Response> {
-    let token = await getAccessToken(id, secret);
+    let token = await getAccessToken(id!, secret!);
     let res = await fetch(url, { ...init, headers: { ...headersFor(token), ...(init?.headers ?? {}) } });
     if (res.status === 401) {
-      token = await getAccessToken(id, secret, true);
+      token = await getAccessToken(id!, secret!, true);
       res = await fetch(url, { ...init, headers: { ...headersFor(token), ...(init?.headers ?? {}) } });
     }
     return res;
   }
 
-  console.log(`  [giftcard] ordering product ${productId} ($${unitPrice}) from Reloadly`);
-  const orderRes = await reloadlyFetch(`${RELOADLY_SANDBOX_URL}/orders`, {
+  console.log(`  [giftcard] ordering product ${productId} ($${unitPrice}) from Reloadly (${reloadlyEnv()})`);
+  const orderRes = await reloadlyFetch(`${RELOADLY_API_URL}/orders`, {
     method: "POST",
     body: JSON.stringify({
       productId,
@@ -91,7 +124,7 @@ export async function purchaseGiftCard(productId: number, unitPrice: number, ord
 
   for (let i = 0; i < 10; i++) {
     const codeRes = await reloadlyFetch(
-      `${RELOADLY_SANDBOX_URL}/orders/transactions/${orderData.transactionId}/cards`,
+      `${RELOADLY_API_URL}/orders/transactions/${orderData.transactionId}/cards`,
     );
     if (codeRes.ok) {
       const cards = (await codeRes.json()) as { cardNumber?: string; pinCode?: string }[];

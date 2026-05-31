@@ -13,32 +13,49 @@ export const FHENIX_URL = "https://fhenix.io";
 // Base Sepolia explorer addresses (from the monorepo README).
 export const BASESCAN = {
   sigill:
-    "https://sepolia.basescan.org/address/0x23A0EB16E5bb10c46D9653B5D6688cE965e30324",
+    "https://sepolia.basescan.org/address/0x0dED2B81A0463e6af64110d637CADda4545D8470",
   cUSDC:
-    "https://sepolia.basescan.org/address/0xaFA944F1B5f929693f92Ee4445B441FA70953A2E",
-  usdc: "https://sepolia.basescan.org/address/0xE29D70400026d77a790a8E483168B94D6E36424F",
+    "https://sepolia.basescan.org/address/0x93Db1E63315463bA6A25918820959d1086c50E06",
+  usdc: "https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f",
 };
 
 // ─── Product mock data (matches packages/app/src/lib/contracts.ts) ─
+// Only App Store is live right now. The rest are display-only in the picker
+// (rendered greyed with "Coming soon") so the mock reflects that visually.
 export const PRODUCTS = [
-  { id: 1, label: "Amazon US", face: 5, priceUsdc: 10 },
-  { id: 2, label: "Amazon US", face: 10, priceUsdc: 15 },
-  { id: 3, label: "Amazon US", face: 25, priceUsdc: 30 },
+  { id: 1, label: "App Store & iTunes", face: 2, priceUsdc: 2, comingSoon: false },
+  { id: 2, label: "Netflix", face: 20, priceUsdc: 20, comingSoon: true },
+  { id: 3, label: "Spotify", face: 10, priceUsdc: 10, comingSoon: true },
 ] as const;
 
-// The buy-wizard mock arrives at the confirm step with #02 selected.
-export const SELECTED_PRODUCT_ID = 2;
+// Brand strip rendered above the buy-wizard mock — a quick visual answer to
+// "which brands does this support". Order matters; App Store is "Live now",
+// the rest are "Coming soon".
+export const SUPPORTED_BRANDS = [
+  { name: "App Store & iTunes", icon: "https://cdn.simpleicons.org/apple/white", live: true },
+  { name: "Netflix", icon: "https://cdn.simpleicons.org/netflix/E50914" },
+  { name: "Spotify", icon: "https://cdn.simpleicons.org/spotify/1DB954" },
+  { name: "Google Play", icon: "https://cdn.simpleicons.org/googleplay/white" },
+  { name: "Xbox Live", icon: "/xbox.png" },
+  { name: "PlayStation", icon: "https://cdn.simpleicons.org/playstation/0070D1" },
+  { name: "Steam", icon: "https://cdn.simpleicons.org/steam/white" },
+  { name: "Roblox", icon: "https://cdn.simpleicons.org/roblox/white" },
+] as const;
+
+// The buy-wizard mock arrives at the confirm step with App Store selected.
+export const SELECTED_PRODUCT_ID = 1;
 
 // Demo relay address shown in the Sealed envelope row.
-export const RELAY_ADDR = "0x7a3f…b201";
+export const RELAY_ADDR = "0xc637…50FC";
 
-// Demo order shown in the reveal section.
+// Demo order shown in the reveal section. Matches a real live-test card we
+// minted against Reloadly production for the App Store $2 product.
 export const DEMO_ORDER_ID = 142;
-export const DEMO_PAID_CUSDC = "15.00 cUSDC";
+export const DEMO_PAID_CUSDC = "2.505 cUSDC";
 
 // The gift card code that scrambles in. Kept here so any future product
 // page or shareable preview reuses the same string.
-export const DEMO_CODE = "AMZN 7K3F 9Q2P X4D8";
+export const DEMO_CODE = "X8D5 WDV9 CQ24 V6XW";
 
 // ─── CTA labels ────────────────────────────────────────────────────
 export const CTA_OPEN_APP = "Open Sigill";
