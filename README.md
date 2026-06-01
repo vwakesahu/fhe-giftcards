@@ -2,7 +2,7 @@
 
 Private checkout using FHE on Base Sepolia. You buy a gift card, and nobody on-chain can see what you bought, how much you paid, or the code you got back.
 
-Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o), **Wave 4** [youtu.be/W8zUIEEb8uo](https://youtu.be/W8zUIEEb8uo), **Wave 5** _TBD_.
+Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.store](https://app.sigill.store/)**. Walkthrough videos: **Wave 2** [youtu.be/g_jdN4tMQio](https://youtu.be/g_jdN4tMQio), **Wave 3** [youtu.be/bByseZNlY2o](https://youtu.be/bByseZNlY2o), **Wave 4** [youtu.be/W8zUIEEb8uo](https://youtu.be/W8zUIEEb8uo), **Wave 5** [youtu.be/Ucd8nTsQXkY](https://youtu.be/Ucd8nTsQXkY).
 
 **Deployed on Base Sepolia**
 
