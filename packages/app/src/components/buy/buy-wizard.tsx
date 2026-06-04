@@ -86,15 +86,29 @@ export function BuyWizard() {
       const client = await ensureCofheConnected(publicClient as any, walletClient);
 
       // ── 1. Quote ─────────────────────────────────────────
-      //      Contract computes (amount + observerFee + 0.25% platformFee)
-      //      inside the encrypted domain and emits OrderQuoted with the
-      //      handle. amountUsdc is the gift-card price in cUSDC base units.
+      //      Both productId and the gift-card amount go in as InEuint64
+      //      ciphertexts so neither value appears in calldata as plaintext.
+      //      The contract computes (amount + observerFee + 0.25% platformFee)
+      //      entirely in the encrypted domain and emits OrderQuoted with
+      //      handles for the productId + total. Catalog enforcement moves
+      //      to the observer's PRODUCT_MAP — unknown products get rejected
+      //      at fulfillment (escrow refunds same-tx via FHE.eq mismatch).
+      toast.message("Encrypting order");
+      const [encProductId, encQuoteAmount] = await client
+        .encryptInputs([
+          Encryptable.uint64(BigInt(product.id)),
+          Encryptable.uint64(priceRaw),
+        ])
+        .execute();
+      assertCorrectEncryptedItemInput(encProductId);
+      assertCorrectEncryptedItemInput(encQuoteAmount);
+
       toast.message("Requesting quote");
       const quoteCall = {
         address: addresses.sigill,
         abi: sigillAbi,
         functionName: "quoteOrder" as const,
-        args: [BigInt(product.id), selectedObserver.address, priceRaw] as const,
+        args: [encProductId, selectedObserver.address, encQuoteAmount] as const,
         account: walletClient.account!,
       };
       const quoteGas = await simulateAndGetGas(
@@ -111,7 +125,7 @@ export function BuyWizard() {
         hash: quoteHash,
       });
       if (quoteReceipt.status !== "success") {
-        throw new Error("quoteOrder reverted — product may not be active");
+        throw new Error("quoteOrder reverted — relay may be at capacity or unbonded");
       }
 
       const quotedLog = quoteReceipt.logs
@@ -288,11 +302,9 @@ export function BuyWizard() {
         ? "Relay queue is full — pick another relay"
         : /Observer not bonded/i.test(msg)
           ? "This relay is no longer bonded — pick another"
-          : /unknown product/i.test(msg)
-            ? "Product isn't active in the catalogue yet — admin must enable it"
-            : /Quote expired/i.test(msg)
-              ? "Quote expired before confirm — start over"
-              : msg.slice(0, 140);
+          : /Quote expired/i.test(msg)
+            ? "Quote expired before confirm — start over"
+            : msg.slice(0, 140);
       toast.error(friendly);
       setPlacing(false);
     }

@@ -25,7 +25,7 @@ contract Observer {
         uint256 indexed pendingId,
         address indexed buyer,
         address indexed observer,
-        uint256 productId,
+        uint256 productIdHandle,
         uint256 expectedTotalHandle,
         uint256 expiresAt
     );
@@ -66,10 +66,13 @@ contract Observer {
     // Stash of contract-computed totals between quoteOrder and confirmOrder.
     // confirmOrder reads `expectedTotal` and FHE.eq's it against what the
     // buyer actually approved — that's the tamper-resistance guarantee.
+    // productId is stored as an FHE handle (not plaintext) so it never leaks
+    // through calldata or storage. The observer learns it at fulfillment by
+    // decrypting via the ACL grant set in `_quoteOrder`.
     struct PendingOrder {
         address buyer;
         address observer;
-        uint256 productId;
+        euint64 encProductId;
         euint64 expectedTotal;
         euint64 platformFee;
         uint256 expiresAt;
@@ -153,16 +156,31 @@ contract Observer {
     /// @notice Step 1 — compute the encrypted total (price + observerFee +
     ///         platformFee) and stash it. Emits OrderQuoted with the handle
     ///         so the buyer's frontend can unseal it and prepare the approve.
-    function _quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc)
+    ///
+    ///         Both productId and amount come in as InEuint64 (ciphertext +
+    ///         zk proof signed by msg.sender) so they never appear in
+    ///         calldata as plaintext. The buyer's encrypted product handle
+    ///         gets ACL'd to the observer here, and the observer decrypts
+    ///         it off-chain at fulfilment via cofhejs. Product catalog
+    ///         enforcement moves to the observer's PRODUCT_MAP — unknown
+    ///         products get rejected at `_fulfillOrder` and the buyer is
+    ///         refunded same-tx, identical to today's misquote behaviour.
+    function _quoteOrder(InEuint64 calldata encProductId, address observerAddress, InEuint64 calldata encAmount)
         internal
         returns (uint256 pendingId)
     {
-        require(productActive[productId], "unknown product");
-        require(amountUsdc > 0, "Amount must be > 0");
         require(observerBondAmount[observerAddress] >= MIN_BOND_AMOUNT, "Observer not bonded");
         require(observerDetails[observerAddress].slotLeft > 0, "Observers queue is full");
 
-        euint64 price = FHE.asEuint64(amountUsdc);
+        euint64 productId = FHE.asEuint64(encProductId);
+        euint64 price = FHE.asEuint64(encAmount);
+
+        // Observer needs decrypt permission on the productId so they can
+        // route it through PRODUCT_MAP at fulfillment. Contract keeps a
+        // handle on it for the eventual order-write step.
+        FHE.allowThis(productId);
+        FHE.allow(productId, observerAddress);
+
         euint64 observerFee = FHE.asEuint64(observerDetails[observerAddress].observerFees);
         euint64 platformFee = FHE.div(FHE.mul(price, FHE.asEuint64(uint64(PLATFORM_FEE))), FHE.asEuint64(uint64(10000)));
         euint64 total = FHE.add(FHE.add(price, observerFee), platformFee);
@@ -176,13 +194,13 @@ contract Observer {
         pending[pendingId] = PendingOrder({
             buyer: msg.sender,
             observer: observerAddress,
-            productId: productId,
+            encProductId: productId,
             expectedTotal: total,
             platformFee: platformFee,
             expiresAt: exp
         });
 
-        emit OrderQuoted(pendingId, msg.sender, observerAddress, productId, euint64.unwrap(total), exp);
+        emit OrderQuoted(pendingId, msg.sender, observerAddress, euint64.unwrap(productId), euint64.unwrap(total), exp);
     }
 
     /// @notice Step 2 — pull the buyer's pre-approved allowance, verify it
@@ -197,12 +215,10 @@ contract Observer {
 
         address observerAddr = p.observer;
 
-        // Mint a fresh encProductId from the stashed plaintext — observer
-        // gets ACL so they can decrypt during fulfilment. Buyer never
-        // supplies an InEuint64 here, so there's nothing to forge.
-        euint64 productIdHandle = FHE.asEuint64(p.productId);
-        FHE.allowThis(productIdHandle);
-        FHE.allow(productIdHandle, observerAddr);
+        // productId was already encrypted + ACL'd to the observer back in
+        // _quoteOrder. No re-encryption needed; the stashed handle carries
+        // its ACL through to here.
+        euint64 productIdHandle = p.encProductId;
 
         euint64 paid = cUSDC.transferFromAllowance(msg.sender, address(this));
 
@@ -467,14 +483,14 @@ contract Observer {
         returns (
             address buyer,
             address observer,
-            uint256 productId,
+            euint64 encProductId,
             euint64 expectedTotal,
             euint64 platformFee,
             uint256 expiresAt
         )
     {
         PendingOrder storage p = pending[pendingId];
-        return (p.buyer, p.observer, p.productId, p.expectedTotal, p.platformFee, p.expiresAt);
+        return (p.buyer, p.observer, p.encProductId, p.expectedTotal, p.platformFee, p.expiresAt);
     }
 
     function getObserverDetail() external view returns (ObserverDetails[] memory) {

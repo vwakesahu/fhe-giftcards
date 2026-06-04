@@ -27,12 +27,16 @@ contract Sigill is Observer {
         admin = msg.sender;
     }
 
-    /// @notice Step 1: get a quote. Buyer specifies the gift-card amount in
-    ///         cUSDC base units (6 decimals). Emits OrderQuoted with the
-    ///         encrypted total (amount + observerFee + platformFee) the buyer
-    ///         must approve on cUSDC before confirming.
-    function quoteOrder(uint256 productId, address observerAddress, uint64 amountUsdc) external returns (uint256 pendingId) {
-        return _quoteOrder(productId, observerAddress, amountUsdc);
+    /// @notice Step 1: get a quote. Both productId and amount come in as
+    ///         InEuint64 (ciphertext + zk proof signed by msg.sender) so the
+    ///         buyer's choice never appears in calldata as plaintext. The
+    ///         contract returns the encrypted total handle via OrderQuoted;
+    ///         buyer unseals it and approves cUSDC for exactly that amount.
+    function quoteOrder(InEuint64 calldata encProductId, address observerAddress, InEuint64 calldata encAmount)
+        external
+        returns (uint256 pendingId)
+    {
+        return _quoteOrder(encProductId, observerAddress, encAmount);
     }
 
     /// @notice Step 2: confirm after approving cUSDC for the quoted total.

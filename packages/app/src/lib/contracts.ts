@@ -166,19 +166,19 @@ export const cUSDCAbi = [
 
 // ─── Sigill ──────────────────────────────────────────────
 export const sigillAbi = [
-  // Step 1 of the new two-step checkout. Returns `pendingId` and emits
-  // OrderQuoted carrying the encrypted total handle the buyer must approve
-  // before calling confirmOrder. `amountUsdc` is the gift-card price in
-  // cUSDC base units (6 decimals); the contract adds observerFee + 0.25%
-  // platformFee inside the encrypted domain.
+  // Step 1 of the two-step checkout. Both productId and amount come in as
+  // InEuint64 ciphertexts so neither appears in calldata as plaintext —
+  // mempool watchers + archive nodes can't tell what was bought or how
+  // much. Returns `pendingId`, emits OrderQuoted with the encrypted total
+  // handle the buyer must unseal and re-encrypt for the cUSDC approve.
   {
     name: "quoteOrder",
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "productId", type: "uint256" },
+      { name: "encProductId", type: "tuple", components: InEncStruct },
       { name: "observerAddress", type: "address" },
-      { name: "amountUsdc", type: "uint64" },
+      { name: "encAmount", type: "tuple", components: InEncStruct },
     ],
     outputs: [{ name: "pendingId", type: "uint256" }],
   },
@@ -219,7 +219,7 @@ export const sigillAbi = [
     outputs: [
       { name: "buyer", type: "address" },
       { name: "observer", type: "address" },
-      { name: "productId", type: "uint256" },
+      { name: "encProductId", type: "uint256" },
       { name: "expectedTotal", type: "uint256" },
       { name: "platformFee", type: "uint256" },
       { name: "expiresAt", type: "uint256" },
@@ -353,7 +353,7 @@ export const sigillAbi = [
       { name: "pendingId", type: "uint256", indexed: true },
       { name: "buyer", type: "address", indexed: true },
       { name: "observer", type: "address", indexed: true },
-      { name: "productId", type: "uint256" },
+      { name: "productIdHandle", type: "uint256" },
       { name: "expectedTotalHandle", type: "uint256" },
       { name: "expiresAt", type: "uint256" },
     ],

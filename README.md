@@ -6,8 +6,8 @@ Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.stor
 
 **Deployed on Base Sepolia**
 
-- Sigill: [`0x34F6…85Ee6`](https://sepolia.basescan.org/address/0x34F62D4B05631a67f17b56BeDD2F946373a85Ee6)
-- cUSDC (ConfidentialERC20): [`0x0F8d…1c8E`](https://sepolia.basescan.org/address/0x0F8dF4b67c7C553D9470182d42Af783c6D5E1c8E)
+- Sigill: [`0x6EabB…DD186`](https://sepolia.basescan.org/address/0x6EabB2fB2b32F1988e4a3B89543Ce1a2117DD186)
+- cUSDC (ConfidentialERC20): [`0x7c60…a5eB`](https://sepolia.basescan.org/address/0x7c60BC6c5b4aA568b854173c1cA3A2810A75a5eB)
 - USDC (Mock on Base Sepolia): [`0xe29D…424F`](https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f)
 
 <p>
@@ -37,7 +37,7 @@ Your browser seals the inputs with FHE. You wrap some USDC into a confidential t
 **The flow**
 
 1. Buyer wraps USDC into cUSDC (a confidential ERC-20).
-2. Buyer calls `quoteOrder(productId, observer, amountUsdc)`. The contract computes the encrypted total (`price + observerFee + 0.25% platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits the handle.
+2. Buyer encrypts productId + amount client-side, then calls `quoteOrder(encProductId, observer, encAmount)`. Both fields enter as `InEuint64` so neither appears in calldata as plaintext. The contract computes the encrypted total (`price + observerFee + 0.25% platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits the handle.
 3. Buyer unseals the quoted total locally, re-encrypts it as the cUSDC `approve` amount, and submits the approve.
 4. Buyer calls `confirmOrder(pendingId)`. Sigill pulls the allowance and FHE.eq-verifies it against the stored quote. Mismatch zeros the escrow and refunds in-place silently.
 5. The picked observer has FHE decryption permission on just the product ID and the paid amount. They confirm the payment covers the price, buy the card from Reloadly, AES-encrypt the code, pin the ciphertext to IPFS, and FHE-wrap the AES key so only the buyer can open it. The escrowed cUSDC splits at `fulfillOrder`: observer gets `encPaid - platformFee`, treasury gets `platformFee`, both encrypted transfers in the same tx.
@@ -159,7 +159,7 @@ struct Order {
 }
 ```
 
-Checkout is two-step. `quoteOrder(productId, observer, amountUsdc)` computes the encrypted total (`price + observerFee + platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits `OrderQuoted(pendingId, buyer, observer, productId, expectedTotalHandle, expiresAt)`. The buyer unseals the total, re-encrypts as the cUSDC approve amount, then calls `confirmOrder(pendingId)`. `confirmOrder` pulls the allowance via `transferFromAllowance`, FHE.eq-verifies it against the stored quote, and silently zeros the escrow plus refunds in-place on mismatch. The buyer can't tamper because the comparison value is contract-computed.
+Checkout is two-step. `quoteOrder(encProductId, observer, encAmount)` takes both productId and amount as `InEuint64` ciphertexts so neither value appears in calldata as plaintext (mempool watchers + archive nodes see opaque handles instead of `productId=1, amountUsdc=2_000_000`). The contract computes the encrypted total (`price + observerFee + platformFee`), stores it under a `pendingId` with a 5-minute TTL, and emits `OrderQuoted(pendingId, buyer, observer, productIdHandle, expectedTotalHandle, expiresAt)`. The buyer unseals the total, re-encrypts as the cUSDC approve amount, then calls `confirmOrder(pendingId)`. `confirmOrder` pulls the allowance via `transferFromAllowance`, FHE.eq-verifies it against the stored quote, and silently zeros the escrow plus refunds in-place on mismatch. The buyer can't tamper because the comparison value is contract-computed. Catalog enforcement (which productIds are real) moves to the observer's `PRODUCT_MAP` — unknown products get rejected at fulfillment with the buyer's escrow refunded.
 
 `confirmOrder` emits **`OrderInProccessed`** when the picked observer had a free slot (status `Pending`) or **`OrderInQueued`** when waitlisted behind an earlier order on the same observer (status `Queued`). Once the head order clears, the next queued one auto-promotes to `Pending` with a fresh deadline.
 
@@ -216,9 +216,9 @@ Wave 4 ships the first half of the [fee model draft](docs/fee-model.md): a flat 
 The dApp ships eight brands in the picker. Only one is wired on-chain right now; the rest are display-only ("Coming soon") to signal where the catalog is going without claiming what isn't built yet.
 
 - **App Store & iTunes** — live, routes to Reloadly product 21 ($2 range).
-- **Netflix, Spotify, Google Play, Xbox Live, PlayStation, Steam, Roblox** — coming soon. Their on-chain product slots aren't activated, so `quoteOrder` rejects them at the contract layer regardless of UI state.
+- **Netflix, Spotify, Google Play, Xbox Live, PlayStation, Steam, Roblox** — coming soon. The wizard disables them in the picker and the observer's `PRODUCT_MAP` doesn't carry their Reloadly IDs, so any order that snuck past the UI would be rejected at fulfillment with the buyer's escrow refunded same-tx.
 
-To activate another brand, set `productActive[id]` on Sigill (admin-only `setProductActive(id, true)`), add the brand's Reloadly product ID to `PRODUCT_MAP_LIVE` in `packages/observer/src/giftcard.ts`, and flip `comingSoon: false` in the matching `PRODUCTS` entry on the app + landing.
+To activate another brand, add its Reloadly product ID to `PRODUCT_MAP_LIVE` in `packages/observer/src/giftcard.ts` and flip `comingSoon: false` in the matching `PRODUCTS` entry on the app + landing. (Catalog enforcement lives off-chain on the observer now — the contract can't see which productId was picked because it arrives as an `InEuint64` ciphertext, so there's nothing to set on Sigill.)
 
 ## Stack
 

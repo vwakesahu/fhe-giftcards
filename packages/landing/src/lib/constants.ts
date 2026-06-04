@@ -13,9 +13,9 @@ export const FHENIX_URL = "https://fhenix.io";
 // Base Sepolia explorer addresses (from the monorepo README).
 export const BASESCAN = {
   sigill:
-    "https://sepolia.basescan.org/address/0x0dED2B81A0463e6af64110d637CADda4545D8470",
+    "https://sepolia.basescan.org/address/0x6EabB2fB2b32F1988e4a3B89543Ce1a2117DD186",
   cUSDC:
-    "https://sepolia.basescan.org/address/0x93Db1E63315463bA6A25918820959d1086c50E06",
+    "https://sepolia.basescan.org/address/0x7c60BC6c5b4aA568b854173c1cA3A2810A75a5eB",
   usdc: "https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f",
 };
 

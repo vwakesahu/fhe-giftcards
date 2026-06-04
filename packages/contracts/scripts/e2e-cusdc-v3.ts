@@ -202,13 +202,26 @@ async function main() {
   console.log("  Wrapped\n");
 
   // ── 6. Quote order — contract computes encrypted total ─
-  //      New two-step: quoteOrder returns a pendingId and emits OrderQuoted
-  //      with the handle for (amount + observerFee + 0.25% platformFee).
-  console.log(`⑥ Buyer requests quote for product #${PRODUCT_ID} ($${Number(PRODUCT_PRICE_USDC) / 1e6}) via observer ${observer.address}...`);
+  //      quoteOrder now takes InEuint64 for both productId and amount so
+  //      neither value appears in calldata as plaintext. The buyer encrypts
+  //      both client-side (signed for msg.sender) and the contract verifies
+  //      via FHE.asEuint64 before doing the encrypted arithmetic.
+  console.log(`⑥ Buyer encrypts productId + amount client-side...`);
+  await connect(buyer);
+  const [encProductIdQuote, encAmountQuote] = await client
+    .encryptInputs([
+      Encryptable.uint64(PRODUCT_ID),
+      Encryptable.uint64(PRODUCT_PRICE_USDC),
+    ])
+    .execute();
+  console.log(`  productId handle: ${encProductIdQuote.ctHash}`);
+  console.log(`  amount    handle: ${encAmountQuote.ctHash}\n`);
+
+  console.log(`⑥a Buyer requests quote via observer ${observer.address}...`);
   const quoteTx = await (sigill.connect(buyer) as any).quoteOrder(
-    PRODUCT_ID,
+    encProductIdQuote,
     observer.address,
-    PRODUCT_PRICE_USDC,
+    encAmountQuote,
   );
   const quoteReceipt = await quoteTx.wait();
   console.log(`  quoteOrder tx: ${quoteTx.hash}`);
