@@ -23,8 +23,8 @@ Live:
 
 - Landing: https://www.sigill.store/
 - App: https://app.sigill.store/
-- Sigill: https://sepolia.basescan.org/address/0x34F62D4B05631a67f17b56BeDD2F946373a85Ee6
-- cUSDC: https://sepolia.basescan.org/address/0x0F8dF4b67c7C553D9470182d42Af783c6D5E1c8E
+- Sigill: https://sepolia.basescan.org/address/0xb302566eA948f2039Cf6f8a30719F56a93e49Ab4
+- cUSDC: https://sepolia.basescan.org/address/0x285b239fc9fE8B100d0Cb865cb44BdB166f81977
 - USDC (Mock on Base Sepolia): https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f
 - Walkthrough video (Wave 5): https://youtu.be/Ucd8nTsQXkY
 
@@ -39,4 +39,4 @@ The earlier ships proved the privacy guarantee held through a tamper-resistant c
 
 ## What's next
 
-Sigill is product-ready today. Contracts, observer pipeline, picker UX, cofhejs flow, and the Reloadly production integration all run end-to-end on Base Sepolia, with real Apple cards landing in buyer wallets through the same encrypted checkout path that protects the payment amount and the product choice. What we're waiting for is the substrate: Fhenix CoFHE on a mainnet chain. The moment that ships, Sigill flips three env values (RPC, Sigill address, cUSDC address), redeploys the same contracts, and goes live for real-money commerce on the exact code paths the walkthrough demonstrates. Catalog expansion (Netflix, Spotify, and the rest of the coming-soon brands) lands the moment each one is supply-confirmed on Reloadly. The relay-trust improvements in [docs/reputation-and-slashing.md](reputation-and-slashing.md) ship in the same window.
+Sigill is product-ready today. Contracts, observer pipeline, picker UX, @cofhe/sdk flow, and the Reloadly production integration all run end-to-end on Base Sepolia, with real Apple cards landing in buyer wallets through the same encrypted checkout path that protects the payment amount and the product choice. What we're waiting for is the substrate: Fhenix CoFHE on a mainnet chain. The moment that ships, Sigill flips three env values (RPC, Sigill address, cUSDC address), redeploys the same contracts, and goes live for real-money commerce on the exact code paths the walkthrough demonstrates. Catalog expansion (Netflix, Spotify, and the rest of the coming-soon brands) lands the moment each one is supply-confirmed on Reloadly. The relay-trust improvements in [docs/reputation-and-slashing.md](reputation-and-slashing.md) ship in the same window.

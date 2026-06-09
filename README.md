@@ -6,8 +6,8 @@ Live at **[sigill.store](https://www.sigill.store/)**. App at **[app.sigill.stor
 
 **Deployed on Base Sepolia**
 
-- Sigill: [`0x6EabB…DD186`](https://sepolia.basescan.org/address/0x6EabB2fB2b32F1988e4a3B89543Ce1a2117DD186)
-- cUSDC (ConfidentialERC20): [`0x7c60…a5eB`](https://sepolia.basescan.org/address/0x7c60BC6c5b4aA568b854173c1cA3A2810A75a5eB)
+- Sigill: [`0xb302…9Ab4`](https://sepolia.basescan.org/address/0xb302566eA948f2039Cf6f8a30719F56a93e49Ab4)
+- cUSDC (ConfidentialERC20): [`0x285b…1977`](https://sepolia.basescan.org/address/0x285b239fc9fE8B100d0Cb865cb44BdB166f81977)
 - USDC (Mock on Base Sepolia): [`0xe29D…424F`](https://sepolia.basescan.org/address/0xe29d70400026d77a790a8e483168b94d6e36424f)
 
 <p>

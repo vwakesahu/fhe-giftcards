@@ -22,7 +22,7 @@ contract ConfidentialERC20 {
     ///         `decryptForTx`) that hasn't shipped to npm yet. Until that
     ///         arrives we delegate the unseal to a permissioned operator
     ///         who already has `FHE.allow(debit, unwrapper)` and produces
-    ///         plaintexts off-chain via `cofhejs.unseal`.
+    ///         plaintexts off-chain via `client.decryptForView`.
     address public immutable unwrapper;
     string public name;
     string public symbol;
@@ -88,7 +88,7 @@ contract ConfidentialERC20 {
         _debit(msg.sender, debit);
 
         // ACL so the contract + recipient + unwrapper can all reference the
-        // debit handle. The unwrapper uses its ACL to call `cofhejs.unseal`
+        // debit handle. The unwrapper uses its ACL to call `client.decryptForView`
         // and get the plaintext; nobody else can read the value.
         FHE.allowThis(debit);
         FHE.allow(debit, msg.sender);
@@ -98,12 +98,12 @@ contract ConfidentialERC20 {
         pendingUnwraps[unwrapId] = PendingUnwrap({recipient: msg.sender, encAmount: debit, claimed: false});
         // Emit the raw handle so off-chain listeners can unseal without a
         // second read against `pendingUnwraps`.
-        emit UnwrapRequested(unwrapId, msg.sender, euint64.unwrap(debit));
+        emit UnwrapRequested(unwrapId, msg.sender, uint256(euint64.unwrap(debit)));
     }
 
     /// @notice Finalise an unwrap. Either the trusted `unwrapper` or the
     ///         original `recipient` may submit `plain`. Both paths are
-    ///         trusted to unseal the debit handle off-chain via cofhejs and
+    ///         trusted to unseal the debit handle off-chain via `cofhe-sdk` and
     ///         pass the honest value; the recipient has ACL via
     ///         `FHE.allow(debit, msg.sender)` set in `requestUnwrap`.
     ///         Demo trust model until Fhenix's SDK `decryptForTx` ships, at
@@ -163,7 +163,7 @@ contract ConfidentialERC20 {
         FHE.allow(transferred, msg.sender);
     }
 
-    /// @notice EOA-facing approve: caller signs an `InEuint64` (via cofhejs)
+    /// @notice EOA-facing approve: caller signs an `InEuint64` (via `cofhe-sdk`)
     ///         for the amount they want to authorize. `FHE.asEuint64` mints a
     ///         fresh handle owned by the caller, so subsequent `FHE.allow*`
     ///         calls succeed.
@@ -176,7 +176,7 @@ contract ConfidentialERC20 {
     /// @notice Contract-facing approve: caller passes an existing `euint64`
     ///         handle that it already has manage rights on. Useful when an
     ///         escrow contract holds its own funds and wants to authorize a
-    ///         spender without round-tripping through cofhejs.
+    ///         spender without round-tripping through `cofhe-sdk`.
     function approve(address spender, euint64 amount) external returns (euint64) {
         _approve(msg.sender, spender, amount);
         return amount;

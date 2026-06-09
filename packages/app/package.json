@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@cofhe/sdk": "^0.5.2",
+    "@cofhe/sdk": "^0.6.0",
     "@rainbow-me/rainbowkit": "^2.2.3",
     "@tanstack/react-query": "^5.66.0",
     "blo": "^2.0.0",

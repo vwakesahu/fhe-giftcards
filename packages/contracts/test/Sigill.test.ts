@@ -1,8 +1,8 @@
 /**
  * Sigill / Observer / ConfidentialERC20 — quote-then-confirm flow.
  *
- * Run on the hardhat network so the cofhe-hardhat-plugin's mock task manager,
- * mock zk-verifier, and mock query-decrypter are available:
+ * Run on the hardhat network so @cofhe/hardhat-plugin's mock task manager,
+ * mock zk-verifier, and mock threshold network are deployed:
  *
  *   npx hardhat test --network hardhat
  *
@@ -13,7 +13,7 @@
 import { expect } from "chai";
 import hre, { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
-import { cofhejs, Encryptable, FheTypes } from "cofhejs/node";
+import { Encryptable, FheTypes, type CofheClient } from "@cofhe/sdk";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import type { ConfidentialERC20, MockUSDC, Sigill } from "../typechain-types";
 
@@ -33,23 +33,32 @@ const PLATFORM_FEE_AMOUNT =
 const TOTAL_AMOUNT = PRODUCT_PRICE + OBSERVER_FEE + PLATFORM_FEE_AMOUNT; // 10_025_000
 const PROTOCOL_VAULT = "0x37DFfFfB73b4A7eE6584F1ea56bac618c29c6882";
 
-async function initCofhe(signer: HardhatEthersSigner) {
-  await hre.cofhe.initializeWithHardhatSigner(signer, { environment: "MOCK" });
+// Cache one client per signer address; createClientWithBatteries also issues a
+// self-permit which we want stable across encryptInputs / decryptForView calls.
+const clientCache = new Map<string, CofheClient>();
+async function clientFor(signer: HardhatEthersSigner): Promise<CofheClient> {
+  const key = signer.address.toLowerCase();
+  let c = clientCache.get(key);
+  if (!c) {
+    c = await hre.cofhe.createClientWithBatteries(signer);
+    clientCache.set(key, c);
+  }
+  return c;
 }
 
 async function encryptUint64(signer: HardhatEthersSigner, value: bigint) {
-  await initCofhe(signer);
-  const [enc] = await hre.cofhe.expectResultSuccess(
-    cofhejs.encrypt([Encryptable.uint64(value)] as const),
-  );
+  const client = await clientFor(signer);
+  const [enc] = await client
+    .encryptInputs([Encryptable.uint64(value)])
+    .execute();
   return enc;
 }
 
 async function encryptUint128(signer: HardhatEthersSigner, value: bigint) {
-  await initCofhe(signer);
-  const [enc] = await hre.cofhe.expectResultSuccess(
-    cofhejs.encrypt([Encryptable.uint128(value)] as const),
-  );
+  const client = await clientFor(signer);
+  const [enc] = await client
+    .encryptInputs([Encryptable.uint128(value)])
+    .execute();
   return enc;
 }
 
@@ -57,10 +66,32 @@ async function unsealUint64(
   signer: HardhatEthersSigner,
   handle: bigint,
 ): Promise<bigint> {
-  await initCofhe(signer);
-  const res = await cofhejs.unseal(handle, FheTypes.Uint64);
-  if (res.error) throw new Error(`unseal failed: ${res.error}`);
-  return res.data as bigint;
+  const client = await clientFor(signer);
+  return (await client
+    .decryptForView(handle, FheTypes.Uint64)
+    .execute()) as bigint;
+}
+
+// quoteOrder takes InEuint64 for both productId and amount (privacy fix).
+// This helper does both encryptions client-side under the buyer's signer
+// and returns the unsent contract call so callers can .wait() or expect-revert.
+async function makeQuoteCall(
+  sigill: Sigill,
+  buyer: HardhatEthersSigner,
+  productId: bigint,
+  observerAddress: string,
+  amountUsdc: bigint,
+) {
+  const client = await clientFor(buyer);
+  const [encProductId, encAmount] = await client
+    .encryptInputs([
+      Encryptable.uint64(productId),
+      Encryptable.uint64(amountUsdc),
+    ])
+    .execute();
+  return sigill
+    .connect(buyer)
+    .quoteOrder(encProductId, observerAddress, encAmount);
 }
 
 function parseLogByName<T extends { interface: { parseLog: (l: { topics: string[]; data: string }) => { name: string; args: Record<string, unknown> } | null } }>(
@@ -90,7 +121,7 @@ function parseLogByName<T extends { interface: { parseLog: (l: { topics: string[
 /**
  * Run the full quote → approve → confirm pipeline. The frontend pattern: the
  * buyer reads OrderQuoted, unseals the expected total (they have ACL via
- * FHE.allow in quoteOrder), then re-encrypts it locally via cofhejs and
+ * FHE.allow in quoteOrder), then re-encrypts it locally via @cofhe/sdk and
  * approves with a fresh InEuint64. The contract verifies via FHE.eq.
  *
  * Pass `approveAmount` to override what gets approved (used by tamper tests).
@@ -105,7 +136,7 @@ async function quoteAndConfirm(
   amountUsdc: bigint = PRODUCT_PRICE,
 ): Promise<bigint> {
   const quoteReceipt = await (
-    await sigill.connect(buyer).quoteOrder(productId, observer.address, amountUsdc)
+    await makeQuoteCall(sigill, buyer, productId, observer.address, amountUsdc)
   ).wait();
   const quoted = parseLogByName(sigill, quoteReceipt!, "OrderQuoted");
   const pendingId = quoted.args.pendingId as bigint;
@@ -275,7 +306,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
       ).to.be.revertedWith("Bond too low");
     });
 
-    it("stores the encrypted observerFees with buyer-readable ACL", async () => {
+    it("stores the observer's flat fee as a plaintext uint64 in the catalog", async () => {
       const fee = 500_000n;
       await (
         await sigill
@@ -285,10 +316,10 @@ describe("Sigill — quote-then-confirm E2E", () => {
 
       const [details] = await sigill.getObserverDetail();
       expect(details.observerAddress).to.equal(observer.address);
-      // Observer has ACL on its own fees handle (granted in registerObserver).
-      expect(await unsealUint64(observer, BigInt(details.observerFees))).to.equal(
-        fee,
-      );
+      // observerFees is plaintext uint64 since the euint64 → uint64 rework.
+      // The dApp's picker reads it directly; the contract re-encrypts inline
+      // at _quoteOrder time for the FHE arithmetic. Compare as a plain int.
+      expect(details.observerFees).to.equal(fee);
     });
 
     it("getObserverAt reverts on out-of-bounds index", async () => {
@@ -310,14 +341,17 @@ describe("Sigill — quote-then-confirm E2E", () => {
     });
 
     it("emits OrderQuoted with the expected total handle the buyer can unseal", async () => {
-      const tx = await sigill.connect(buyer).quoteOrder(1n, observer.address, PRODUCT_PRICE);
+      const tx = await makeQuoteCall(sigill, buyer, 1n, observer.address, PRODUCT_PRICE);
       const receipt = await tx.wait();
       const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
 
       expect(ev.args.pendingId).to.equal(0n);
       expect(ev.args.buyer).to.equal(buyer.address);
       expect(ev.args.observer).to.equal(observer.address);
-      expect(ev.args.productId).to.equal(1n);
+      // productId now travels through calldata as a ciphertext; the event
+      // emits the handle, not the plaintext. Verify the mock backs the
+      // handle with the value the buyer encrypted.
+      await hre.cofhe.mocks.expectPlaintext(BigInt(ev.args.productIdHandle as bigint), 1n);
 
       // Buyer has ACL on the expectedTotal handle and unseals to TOTAL_AMOUNT.
       const handle = ev.args.expectedTotalHandle as bigint;
@@ -332,13 +366,14 @@ describe("Sigill — quote-then-confirm E2E", () => {
 
     it("stashes a PendingOrder addressable via getPendingOrder", async () => {
       await (
-        await sigill.connect(buyer).quoteOrder(1n, observer.address, PRODUCT_PRICE)
+        await makeQuoteCall(sigill, buyer, 1n, observer.address, PRODUCT_PRICE)
       ).wait();
 
       const p = await sigill.getPendingOrder(0n);
       expect(p.buyer).to.equal(buyer.address);
       expect(p.observer).to.equal(observer.address);
-      expect(p.productId).to.equal(1n);
+      // productId stored as an FHE handle now; check it decrypts to 1.
+      await hre.cofhe.mocks.expectPlaintext(BigInt(p.encProductId), 1n);
       expect(await unsealUint64(buyer, BigInt(p.expectedTotal))).to.equal(
         TOTAL_AMOUNT,
       );
@@ -352,7 +387,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
           .registerObserver(customFee, { value: BOND })
       ).wait();
 
-      const tx = await sigill.connect(buyer).quoteOrder(1n, observer2.address, PRODUCT_PRICE);
+      const tx = await makeQuoteCall(sigill, buyer, 1n, observer2.address, PRODUCT_PRICE);
       const receipt = await tx.wait();
       const ev = parseLogByName(sigill, receipt!, "OrderQuoted");
       const handle = ev.args.expectedTotalHandle as bigint;
@@ -362,21 +397,17 @@ describe("Sigill — quote-then-confirm E2E", () => {
       expect(await unsealUint64(buyer, handle)).to.equal(expected);
     });
 
-    it("reverts on an unknown product", async () => {
-      await expect(
-        sigill.connect(buyer).quoteOrder(999n, observer.address, PRODUCT_PRICE),
-      ).to.be.revertedWith("unknown product");
-    });
-
-    it("reverts when amountUsdc is 0", async () => {
-      await expect(
-        sigill.connect(buyer).quoteOrder(1n, observer.address, 0n),
-      ).to.be.revertedWith("Amount must be > 0");
-    });
+    // Note: the old "unknown product" + "amountUsdc == 0" revert tests are gone.
+    // Both checks were dropped when quoteOrder moved to InEuint64 inputs — the
+    // contract no longer sees a plaintext productId to look up in productActive,
+    // and the on-chain require(amountUsdc > 0) couldn't survive the encryption.
+    // Catalog enforcement + zero-amount rejection both move to the observer
+    // (PRODUCT_MAP lookup + paid >= unitPrice check at fulfillment), with
+    // escrow refunded same-tx via the existing FHE.eq mismatch path.
 
     it("reverts when the chosen observer is not bonded", async () => {
       await expect(
-        sigill.connect(buyer).quoteOrder(1n, outsider.address, PRODUCT_PRICE),
+        makeQuoteCall(sigill, buyer, 1n, outsider.address, PRODUCT_PRICE),
       ).to.be.revertedWith("Observer not bonded");
     });
 
@@ -386,7 +417,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
         await quoteAndConfirm(sigill, cUSDC, buyer, observer, BigInt(i + 1));
       }
       await expect(
-        sigill.connect(buyer).quoteOrder(5n, observer.address, PRODUCT_PRICE),
+        makeQuoteCall(sigill, buyer, 5n, observer.address, PRODUCT_PRICE),
       ).to.be.revertedWith("Observers queue is full");
     });
   });
@@ -443,7 +474,8 @@ describe("Sigill — quote-then-confirm E2E", () => {
       // After delete, the stash is zeroed.
       const p = await sigill.getPendingOrder(0n);
       expect(p.buyer).to.equal(ethers.ZeroAddress);
-      expect(p.productId).to.equal(0n);
+      // encProductId field zeros to euint64 default (0) on delete.
+      expect(p.encProductId).to.equal(0n);
     });
   });
 
@@ -460,7 +492,7 @@ describe("Sigill — quote-then-confirm E2E", () => {
 
     async function quote(b = buyer, productId = 1n, obs = observer, amountUsdc = PRODUCT_PRICE) {
       const r = await (
-        await sigill.connect(b).quoteOrder(productId, obs.address, amountUsdc)
+        await makeQuoteCall(sigill, b, productId, obs.address, amountUsdc)
       ).wait();
       const ev = parseLogByName(sigill, r!, "OrderQuoted");
       return ev.args.pendingId as bigint;

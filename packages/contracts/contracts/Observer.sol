@@ -20,7 +20,7 @@ contract Observer {
     event OrderRejected(uint256 indexed orderId, string reason);
     event OrderRefunded(uint256 indexed orderId);
     // Buyer-side listens for this to learn the encrypted total handle, unseals
-    // it via cofhejs, then approves cUSDC for exactly that plaintext amount.
+    // it via `cofhe-sdk`, then approves cUSDC for exactly that plaintext amount.
     event OrderQuoted(
         uint256 indexed pendingId,
         address indexed buyer,
@@ -161,7 +161,7 @@ contract Observer {
     ///         zk proof signed by msg.sender) so they never appear in
     ///         calldata as plaintext. The buyer's encrypted product handle
     ///         gets ACL'd to the observer here, and the observer decrypts
-    ///         it off-chain at fulfilment via cofhejs. Product catalog
+    ///         it off-chain at fulfilment via `cofhe-sdk`. Product catalog
     ///         enforcement moves to the observer's PRODUCT_MAP — unknown
     ///         products get rejected at `_fulfillOrder` and the buyer is
     ///         refunded same-tx, identical to today's misquote behaviour.
@@ -200,7 +200,14 @@ contract Observer {
             expiresAt: exp
         });
 
-        emit OrderQuoted(pendingId, msg.sender, observerAddress, euint64.unwrap(productId), euint64.unwrap(total), exp);
+        emit OrderQuoted(
+            pendingId,
+            msg.sender,
+            observerAddress,
+            uint256(euint64.unwrap(productId)),
+            uint256(euint64.unwrap(total)),
+            exp
+        );
     }
 
     /// @notice Step 2 — pull the buyer's pre-approved allowance, verify it
@@ -270,12 +277,21 @@ contract Observer {
             order.deadline = deadline;
             order.status = Status.Pending;
             emit OrderInProccessed(
-                orderId, msg.sender, euint64.unwrap(productIdHandle), euint64.unwrap(escrowed), observerAddr, deadline
+                orderId,
+                msg.sender,
+                uint256(euint64.unwrap(productIdHandle)),
+                uint256(euint64.unwrap(escrowed)),
+                observerAddr,
+                deadline
             );
         } else {
             order.status = Status.Queued;
             emit OrderInQueued(
-                orderId, msg.sender, euint64.unwrap(productIdHandle), euint64.unwrap(escrowed), observerAddr
+                orderId,
+                msg.sender,
+                uint256(euint64.unwrap(productIdHandle)),
+                uint256(euint64.unwrap(escrowed)),
+                observerAddr
             );
         }
     }
